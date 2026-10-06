@@ -1,6 +1,7 @@
 import os
 import re
 import json
+import httpx
 from datetime import datetime
 from pathlib import Path
 from dotenv import load_dotenv
@@ -10,7 +11,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.staticfiles import StaticFiles
+from fastapi.responses import StreamingResponse
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -28,12 +29,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-PDF_DIRECTORY = os.getenv("PDF_FOLDER", "./PDFS")
-if os.path.exists(PDF_DIRECTORY):
-    app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
-    print(f"✅ Mounted PDF directory: {PDF_DIRECTORY}")
-else:
-    print(f"⚠️ PDF directory not found. PDF viewer will not work, but Chat will.")
+# ✅ Hugging Face Dataset Configuration
+HF_USERNAME = "abhilash-pokuri123"
+HF_DATASET = "ncert-pdfs"
+HF_BASE_URL = f"https://huggingface.co/datasets/{HF_USERNAME}/{HF_DATASET}/resolve/main"
+HF_TREE_URL = f"https://huggingface.co/api/datasets/{HF_USERNAME}/{HF_DATASET}/tree/main"
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -44,6 +44,7 @@ async def startup_event():
     print("✅ Database initialized!")
     print("📚 Search index is ready!")
 
+# --- REQUEST MODELS ---
 class SearchRequest(BaseModel):
     question: str
     book_id: Optional[str] = None
@@ -73,31 +74,80 @@ class ProgressCreate(BaseModel):
     book_id: str
     last_page: int
 
+# --- TEXTBOOKS & CHAPTERS (from Hugging Face) ---
 @app.get("/api/textbooks")
 async def get_textbooks():
-    textbooks = []
-    if not os.path.exists(PDF_DIRECTORY):
+    try:
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            # 1. Get top-level folders
+            response = await http_client.get(HF_TREE_URL)
+            response.raise_for_status()
+            items = response.json()
+
+            textbooks = []
+            for item in items:
+                if item["type"] == "directory":
+                    folder_name = item["path"]
+                    chapters_url = f"{HF_TREE_URL}/{folder_name}"
+                    ch_resp = await http_client.get(chapters_url)
+                    if ch_resp.status_code == 200:
+                        ch_items = ch_resp.json()
+                        pdfs = [
+                            f["path"].split("/")[-1]
+                            for f in ch_items
+                            if f["type"] == "file" and f["path"].lower().endswith(".pdf")
+                        ]
+                        pdfs.sort(key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+                        if pdfs:
+                            textbooks.append({"folder": folder_name, "chapters": pdfs})
+
+            print(f"📚 Loaded {len(textbooks)} textbooks from Hugging Face")
+            return {"textbooks": textbooks}
+    except Exception as e:
+        print(f"⚠️ Error fetching textbooks: {e}")
         return {"textbooks": []}
-    for folder_name in os.listdir(PDF_DIRECTORY):
-        folder_path = os.path.join(PDF_DIRECTORY, folder_name)
-        if os.path.isdir(folder_path):
-            pdfs = [f for f in os.listdir(folder_path) if f.endswith('.pdf')]
-            if len(pdfs) > 0:
-                textbooks.append({
-                    "folder": folder_name,
-                    "chapters": sorted(pdfs, key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-                })
-    return {"textbooks": textbooks}
 
 @app.get("/api/chapters/{folder_name}")
 async def get_chapters(folder_name: str):
-    folder_path = os.path.join(PDF_DIRECTORY, folder_name)
-    if not os.path.exists(folder_path):
-        return {"chapters": []}
-    pdf_files = [f for f in os.listdir(folder_path) if f.endswith('.pdf')]
-    pdf_files.sort(key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
-    return {"chapters": pdf_files}
+    try:
+        chapters_url = f"{HF_TREE_URL}/{folder_name}"
+        async with httpx.AsyncClient(timeout=60) as http_client:
+            response = await http_client.get(chapters_url)
+            response.raise_for_status()
+            items = response.json()
 
+        pdfs = [
+            f["path"].split("/")[-1]
+            for f in items
+            if f["type"] == "file" and f["path"].lower().endswith(".pdf")
+        ]
+        pdfs.sort(key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
+        return {"chapters": pdfs}
+    except Exception as e:
+        print(f"⚠️ Error fetching chapters: {e}")
+        return {"chapters": []}
+
+# ✅ Proxy PDF requests to Hugging Face
+@app.get("/api/pdf/{folder_name}/{chapter_name}")
+async def serve_pdf(folder_name: str, chapter_name: str):
+    pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
+    print(f"📄 Proxying PDF: {pdf_url}")
+    try:
+        async with httpx.AsyncClient(timeout=120) as http_client:
+            req = http_client.build_request("GET", pdf_url, follow_redirects=True)
+            response = await http_client.send(req, stream=True)
+            if response.status_code != 200:
+                raise HTTPException(status_code=response.status_code, detail="PDF not found on HF")
+            return StreamingResponse(
+                response.aiter_bytes(),
+                media_type="application/pdf",
+                headers={"Content-Disposition": f"inline; filename={chapter_name}"}
+            )
+    except Exception as e:
+        print(f"⚠️ Error serving PDF: {e}")
+        raise HTTPException(status_code=500, detail="Failed to fetch PDF")
+
+# --- AUTH APIs ---
 @app.post("/api/auth/google")
 async def google_auth(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.google_id == user.google_id).first()
@@ -116,6 +166,7 @@ async def get_user(user_id: int, db: Session = Depends(get_db)):
         raise HTTPException(status_code=404, detail="User not found")
     return {"id": user.id, "email": user.email, "name": user.name, "profile_pic": user.profile_pic}
 
+# --- CHAT APIs ---
 @app.get("/api/chat/{session_id}")
 async def get_chat_by_id(session_id: int, db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
@@ -249,6 +300,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
         session_id=session.id
     )
 
+# --- NOTES APIs ---
 @app.post("/api/notes")
 async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
     new_note = Note(
@@ -280,6 +332,7 @@ async def delete_note(note_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Note deleted"}
 
+# --- PROGRESS APIs ---
 @app.post("/api/progress")
 async def save_progress(progress: ProgressCreate, db: Session = Depends(get_db)):
     existing = db.query(BookAccess).filter(BookAccess.user_id == 1, BookAccess.book_id == progress.book_id).first()
@@ -298,12 +351,12 @@ async def get_progress(book_id: str, user_id: int, db: Session = Depends(get_db)
         return {"last_page": progress.last_page}
     return {"last_page": 1}
 
+# --- CLEAN AI FUNCTION ---
 def clean_with_llm(chunks, question, is_summary=False):
     rag_context = "\n\n".join(chunks)
 
     if is_summary:
-        prompt = f"""
-You are a friendly, expert NCERT tutor for Indian school students.
+        prompt = f"""You are a friendly, expert NCERT tutor for Indian school students.
 The student is asking for a summary or explanation of the current chapter.
 
 Student's Question: {question}
@@ -311,28 +364,27 @@ Student's Question: {question}
 FULL CHAPTER CONTEXT:
 {rag_context}
 
-IMPORTANT RULES:
+RULES:
 - Provide a comprehensive, well-structured summary of the ENTIRE chapter.
-- Break down the main themes, topics, and concepts.
+- Break down main themes, topics, and concepts.
 - Use simple language for a school student.
-- Do NOT mention page numbers or metadata.
-- Structure your answer with clear headings or bullet points.
+- Do NOT mention page numbers.
+- Use clear headings or bullet points.
 
 Answer:
 """
     else:
-        prompt = f"""
-You are a friendly, expert NCERT tutor for Indian school students.
+        prompt = f"""You are a friendly, expert NCERT tutor for Indian school students.
 
 Student's Question: {question}
 
 TEXTBOOK CONTEXT (Use ONLY this to answer):
 {rag_context}
 
-IMPORTANT RULES:
+RULES:
 - Write a NEW, CLEAN, and SIMPLE answer in your own words.
-- IGNORE page numbers, "Contents", "Foreword", "Preface", metadata.
-- If the answer truly cannot be found in the context, say "I could not find the specific answer in this chapter's text."
+- IGNORE page numbers, "Contents", "Foreword", "Preface".
+- If the answer cannot be found in the context, say "I could not find the specific answer in this chapter's text."
 
 Answer:
 """
