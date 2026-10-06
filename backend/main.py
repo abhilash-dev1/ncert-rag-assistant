@@ -9,7 +9,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
-from rag_search import build_index, search_similar, get_vector_collection
+from rag_search import build_index, search_similar, get_qdrant_client # ✅ Updated import
 from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
 from google import genai
 
@@ -19,15 +19,17 @@ app = FastAPI(title="NCERT RAG (Gemini Tutor)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"], # We will restrict this later
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-PDF_DIRECTORY = r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS"
-app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
-app.mount("/api/cover", StaticFiles(directory=PDF_DIRECTORY), name="covers")
+PDF_DIRECTORY = os.getenv("PDF_FOLDER", r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS")
+# Note: Static file serving for PDFs will need a cloud storage solution later, 
+# for now we will keep this line so it doesn't crash locally.
+if os.path.exists(PDF_DIRECTORY):
+    app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)

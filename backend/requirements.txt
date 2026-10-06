@@ -1,0 +1,11 @@
+fastapi
+uvicorn
+python-dotenv
+pydantic
+sqlalchemy
+google-genai
+tavily-python
+pdfplumber
+langchain-text-splitters
+sentence-transformers
+qdrant-client

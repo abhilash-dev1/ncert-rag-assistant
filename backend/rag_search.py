@@ -3,16 +3,25 @@ import re
 import pdfplumber
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
-import chromadb
+from qdrant_client import QdrantClient
+from qdrant_client.models import Distance, VectorParams, PointStruct
+from dotenv import load_dotenv
+
+load_dotenv()
 
 # --- CONFIG ---
-PDF_FOLDER = r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS"
+PDF_FOLDER = os.getenv("PDF_FOLDER", r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS")
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 50
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
+# ✅ Qdrant Configuration
+QDRANT_URL = os.getenv("https://2cd37365-8851-4778-b10c-62191878b96f.sa-east-1-0.aws.cloud.qdrant.io")
+QDRANT_API_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZGE1OTlmMGQtMjg4YS00NjdlLWE2YzctMzY1MDNlY2ZhZTkyIn0.HwMEIl53d3tXMEl7txCbYSCWF3OfXckh0POHQNlkrEk")
+COLLECTION_NAME = "ncert_search"
+
 embedding_model = None
-vector_collection = None
+qdrant_client = None
 
 def get_embedding_model():
     global embedding_model
@@ -20,14 +29,22 @@ def get_embedding_model():
         embedding_model = SentenceTransformer(EMBEDDING_MODEL)
     return embedding_model
 
-def get_vector_collection():
-    global vector_collection
-    if vector_collection is not None:
-        return vector_collection
-    client = chromadb.PersistentClient(path="chroma_db")
-    collection = client.get_or_create_collection(name="ncert_search")
-    vector_collection = collection
-    return collection
+def get_qdrant_client():
+    global qdrant_client
+    if qdrant_client is None:
+        if not QDRANT_URL or not QDRANT_API_KEY:
+            raise ValueError("❌ QDRANT_URL and QDRANT_API_KEY must be set in environment variables.")
+        qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        
+        # Create collection if it doesn't exist
+        collections = qdrant_client.get_collections().collections
+        if not any(c.name == COLLECTION_NAME for c in collections):
+            qdrant_client.create_collection(
+                collection_name=COLLECTION_NAME,
+                vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+            )
+            print(f"✅ Created Qdrant collection: {COLLECTION_NAME}")
+    return qdrant_client
 
 def clean_chunk_text(text):
     text = re.sub(r'^\s*\d{1,3}\s*$', '', text, flags=re.MULTILINE)
@@ -77,9 +94,7 @@ def build_index(book_id=None):
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 for page_num, page in enumerate(pdf.pages):
-                    # ✅ SKIP THE FIRST 10 PAGES (Foreword, Preface, Copyright)
-                    if page_num < 10:
-                        continue
+                    if page_num < 10: continue # Skip foreword/preface
                         
                     text = page.extract_text()
                     if text and text.strip():
@@ -104,50 +119,66 @@ def build_index(book_id=None):
     print("🔄 Generating embeddings...")
     embeddings = model.encode(all_chunks, show_progress_bar=True)
 
-    collection = get_vector_collection()
-    ids = [f"{m['book_id']}_{m['chapter_id']}_p{m['page']}_c{i}" for i, m in enumerate(all_metadata)]
+    client = get_qdrant_client()
     
+    # ✅ Clear old data in Qdrant
     try:
-        collection.delete(where={"book_id": {"$ne": "dummy"}})
-    except:
-        pass
+        client.delete_collection(collection_name=COLLECTION_NAME)
+        client.create_collection(
+            collection_name=COLLECTION_NAME,
+            vectors_config=VectorParams(size=384, distance=Distance.COSINE),
+        )
+        print("🧹 Cleared old Qdrant collection.")
+    except Exception as e:
+        print(f"⚠️ Could not clear collection: {e}")
 
-    batch_size = 5000
+    # ✅ Upload to Qdrant in batches
+    batch_size = 100
     for i in range(0, len(all_chunks), batch_size):
         end_idx = min(i + batch_size, len(all_chunks))
-        collection.add(
-            documents=all_chunks[i:end_idx],
-            embeddings=embeddings[i:end_idx].tolist(),
-            metadatas=all_metadata[i:end_idx],
-            ids=ids[i:end_idx]
-        )
-        print(f"✅ Added batch {i//batch_size + 1} ({end_idx - i} chunks)")
+        points = [
+            PointStruct(
+                id=i + j,
+                vector=embeddings[i + j].tolist(),
+                payload={
+                    "text": all_chunks[i + j],
+                    "book_id": all_metadata[i + j]["book_id"],
+                    "chapter_id": all_metadata[i + j]["chapter_id"],
+                    "page": all_metadata[i + j]["page"]
+                }
+            )
+            for j in range(end_idx - i)
+        ]
+        client.upsert(collection_name=COLLECTION_NAME, points=points)
+        print(f"✅ Uploaded batch {i//batch_size + 1} ({end_idx - i} chunks)")
 
-    print(f"✅ Indexed {len(all_chunks)} chunks.")
+    print(f"✅ Indexed {len(all_chunks)} chunks to Qdrant Cloud.")
 
 def search_similar(query, book_id=None, top_k=5):
     model = get_embedding_model()
     query_embedding = model.encode([query])[0]
-    collection = get_vector_collection()
-    filter_dict = {"book_id": book_id} if book_id else None
+    client = get_qdrant_client()
+    
+    # Build filter
+    from qdrant_client.models import Filter, FieldCondition, MatchValue
+    query_filter = None
+    if book_id:
+        query_filter = Filter(
+            must=[FieldCondition(key="book_id", match=MatchValue(value=book_id))]
+        )
 
-    results = collection.query(
-        query_embeddings=[query_embedding.tolist()],
-        n_results=top_k,
-        where=filter_dict
+    results = client.search(
+        collection_name=COLLECTION_NAME,
+        query_vector=query_embedding.tolist(),
+        limit=top_k,
+        query_filter=query_filter
     )
 
-    if not results["documents"][0]:
+    if not results:
         return [], [], []
 
-    cleaned_chunks = [clean_chunk_text(chunk) for chunk in results["documents"][0]]
-    
-    valid_chunks = []
-    valid_metadata = []
-    for chunk, meta in zip(cleaned_chunks, results["metadatas"][0]):
-        if len(chunk) > 30:
-            valid_chunks.append(chunk)
-            valid_metadata.append(meta)
+    valid_chunks = [hit.payload["text"] for hit in results]
+    valid_metadata = [{"book_id": hit.payload["book_id"], "chapter_id": hit.payload["chapter_id"], "page": hit.payload["page"]} for hit in results]
+    scores = [hit.score for hit in results]
 
-    scores = [0.9, 0.8, 0.7, 0.6, 0.5][:len(valid_chunks)]
     return valid_chunks, valid_metadata, scores
