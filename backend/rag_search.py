@@ -68,7 +68,6 @@ def get_qdrant_client():
             )
             print(f"✅ Created Qdrant collection: {COLLECTION_NAME}")
         
-        # ✅ Ensure indexes exist
         ensure_indexes(qdrant_client)
     return qdrant_client
 
@@ -147,20 +146,17 @@ def build_index(book_id=None):
 
     client = get_qdrant_client()
     
-    # ✅ Clear old collection, then recreate AND re-create indexes
     try:
         client.delete_collection(collection_name=COLLECTION_NAME)
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
-        # ✅ MUST recreate indexes after deleting collection
         ensure_indexes(client)
         print("🧹 Cleared old Qdrant collection and recreated indexes.")
     except Exception as e:
         print(f"⚠️ Could not clear collection: {e}")
 
-    # ✅ Upload in batches
     batch_size = 100
     for i in range(0, len(all_chunks), batch_size):
         end_idx = min(i + batch_size, len(all_chunks))
@@ -194,18 +190,29 @@ def search_similar(query, book_id=None, top_k=5):
             must=[FieldCondition(key="book_id", match=MatchValue(value=book_id))]
         )
 
-    results = client.search(
-        collection_name=COLLECTION_NAME,
-        query_vector=query_embedding.tolist(),
-        limit=top_k,
-        query_filter=query_filter
-    )
+    # ✅ NEW API: query_points (the old .search() was removed in newer qdrant-client)
+    try:
+        results = client.query_points(
+            collection_name=COLLECTION_NAME,
+            query=query_embedding.tolist(),
+            limit=top_k,
+            query_filter=query_filter
+        )
+        points = results.points
+    except AttributeError:
+        # Fallback for older versions
+        points = client.search(
+            collection_name=COLLECTION_NAME,
+            query_vector=query_embedding.tolist(),
+            limit=top_k,
+            query_filter=query_filter
+        )
 
-    if not results:
+    if not points:
         return [], [], []
 
-    valid_chunks = [hit.payload["text"] for hit in results]
-    valid_metadata = [{"book_id": hit.payload["book_id"], "chapter_id": hit.payload["chapter_id"], "page": hit.payload["page"]} for hit in results]
-    scores = [hit.score for hit in results]
+    valid_chunks = [hit.payload["text"] for hit in points]
+    valid_metadata = [{"book_id": hit.payload["book_id"], "chapter_id": hit.payload["chapter_id"], "page": hit.payload["page"]} for hit in points]
+    scores = [hit.score for hit in points]
 
     return valid_chunks, valid_metadata, scores
