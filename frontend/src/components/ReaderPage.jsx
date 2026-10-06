@@ -12,6 +12,8 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
+const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+
 export default function ReaderPage() {
   const { bookId } = useParams();
   const navigate = useNavigate();
@@ -58,9 +60,8 @@ export default function ReaderPage() {
 
   if (!book) return <div style={{ padding: '40px', textAlign: 'center' }}>Loading book...</div>;
 
-  // ✅ FIXED: Pointing PDF URL to Railway
   const pdfUrl = currentChapter
-    ? `https://ncert-rag-assistant-production.up.railway.app/api/pdf/${encodeURIComponent(book.folder)}/${encodeURIComponent(currentChapter)}`
+    ? `${API_BASE}/api/pdf/${encodeURIComponent(book.folder)}/${encodeURIComponent(currentChapter)}`
     : null;
 
   return (

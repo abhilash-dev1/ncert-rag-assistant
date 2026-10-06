@@ -1,6 +1,8 @@
 import { useState, useEffect, useRef } from 'react';
 import { FaPaperPlane, FaRobot, FaUser, FaTrash, FaDatabase, FaSearch, FaHistory, FaTimes, FaPlus } from 'react-icons/fa';
 
+const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+
 export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const [messages, setMessages] = useState([]);
   const [input, setInput] = useState('');
@@ -15,7 +17,6 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const safeBookId = encodeURIComponent(bookId || '');
   const safeChapterId = encodeURIComponent(chapterId || '');
 
-  // ✅ Reset when chapter changes
   useEffect(() => {
     setMessages([]);
     setCurrentSessionId(null);
@@ -23,17 +24,16 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
     setShowHistory(false);
   }, [bookId, chapterId]);
 
-  // ✅ Load history filtered by book + chapter
   useEffect(() => {
     if (!bookId || !chapterId) return;
-    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
+    fetch(`${API_BASE}/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setHistory(data.history || []))
       .catch(err => console.error("Failed to load history:", err));
   }, [userId, bookId, chapterId]);
 
   const refreshHistory = () => {
-    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
+    fetch(`${API_BASE}/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setHistory(data.history || []));
   };
@@ -59,8 +59,7 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
     setMessageCount(prev => prev + 1);
 
     try {
-      // ✅ FIXED: Pointing to Railway URL
-      const response = await fetch('https://ncert-rag-assistant-production.up.railway.app/chat', {
+      const response = await fetch(`${API_BASE}/chat`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -102,10 +101,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const handleKeyPress = (e) => e.key === 'Enter' && sendMessage();
   const clearChat = () => { setMessages([]); setCurrentSessionId(null); setMessageCount(0); };
 
-  // ✅ Load a full session from history
   const loadChatFromHistory = (sessionId) => {
-    // ✅ FIXED: Pointing to Railway URL
-    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/${sessionId}`)
+    fetch(`${API_BASE}/api/chat/${sessionId}`)
       .then(res => res.json())
       .then(data => {
         const loadedMessages = data.messages.map((msg, idx) => {
@@ -124,7 +121,6 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
         });
         setMessages(loadedMessages);
         setCurrentSessionId(sessionId);
-        // Count only user messages for the limit
         setMessageCount(loadedMessages.filter(m => m.sender === 'user').length);
         setShowHistory(false);
       });

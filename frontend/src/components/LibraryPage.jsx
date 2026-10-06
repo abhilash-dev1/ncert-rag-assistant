@@ -6,13 +6,11 @@ import { jwtDecode } from 'jwt-decode';
 
 const GOOGLE_CLIENT_ID = "332298862506-s6cb3gnhvcbamvvb498hcji62ldto15n.apps.googleusercontent.com";
 
-// Beautiful color palette for book covers
 const coverColors = [
   '#2C3E50', '#E74C3C', '#3498DB', '#27AE60', '#8E44AD',
   '#D35400', '#16A085', '#C0392B', '#2980B9', '#F39C12'
 ];
 
-// Subject-based emojis
 const subjectIcons = {
   'History': '🏛️',
   'Geography': '🌍',
@@ -148,7 +146,6 @@ function LibraryContent() {
                   onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-5px)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.15)'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,0.1)'; }}
                   >
-                    {/* 3D Book Cover */}
                     <div style={{
                       height: '200px',
                       background: coverColors[index % coverColors.length],
@@ -158,7 +155,7 @@ function LibraryContent() {
                       justifyContent: 'center',
                       padding: '10px',
                       position: 'relative',
-                      borderLeft: '8px solid rgba(0,0,0,0.3)' // Book spine
+                      borderLeft: '8px solid rgba(0,0,0,0.3)'
                     }}>
                       <div style={{ fontSize: '50px', marginBottom: '10px' }}>
                         {subjectIcons[book.subject] || '📚'}
@@ -189,7 +186,6 @@ function LibraryContent() {
                       </div>
                     </div>
                     
-                    {/* Book Details */}
                     <div style={{ padding: '12px 15px' }}>
                       <p style={{ fontSize: '13px', fontWeight: 'bold', color: '#333', margin: '0 0 4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                         {book.title}

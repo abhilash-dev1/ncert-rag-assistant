@@ -1,6 +1,8 @@
 import { useState, useEffect } from 'react';
 import { FaStickyNote, FaTrash, FaEdit } from 'react-icons/fa';
 
+const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+
 export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, bookTitle }) {
   const [notes, setNotes] = useState([]);
   const [noteInput, setNoteInput] = useState('');
@@ -9,9 +11,6 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
   const safeBookId = encodeURIComponent(bookId || '');
   const safeChapterId = encodeURIComponent(chapterId || '');
 
-  const API_BASE = 'https://ncert-rag-assistant-production.up.railway.app';
-
-  // ✅ Reload notes when chapter changes
   useEffect(() => {
     if (!bookId || !chapterId) return;
     fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)

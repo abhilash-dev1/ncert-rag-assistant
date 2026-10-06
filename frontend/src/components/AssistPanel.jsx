@@ -31,8 +31,8 @@ export default function AssistPanel({ bookId }) {
     setLoading(true);
 
     try {
-      // ✅ FIXED: Pointing to Railway URL
-      const response = await fetch('https://ncert-rag-assistant-production.up.railway.app/chat', {
+      // ✅ FIXED: Pointing to the new Railway URL (single line)
+      const response = await fetch('https://ncert-rag-assistant-production-ea73.up.railway.app/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ question: input, book_id: bookId || null }),

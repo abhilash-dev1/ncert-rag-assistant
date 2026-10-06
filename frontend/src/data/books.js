@@ -1,14 +1,16 @@
 // frontend/src/data/books.js
 export const books = [];
 
+const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+
 export async function loadBooks() {
   try {
-    const response = await fetch('http://localhost:8000/api/textbooks');
+    const response = await fetch(`${API_BASE}/api/textbooks`);
     const data = await response.json();
 
     if (data.textbooks && data.textbooks.length > 0) {
       const loadedBooks = data.textbooks.map((tb) => ({
-        id: tb.folder,  // ✅ Use folder name as stable ID
+        id: tb.folder,
         title: tb.folder,
         subject: 'NCERT',
         class: extractClass(tb.folder),
