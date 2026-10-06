@@ -126,7 +126,7 @@ async def get_chapters(folder_name: str):
         print(f"⚠️ Error fetching chapters: {e}")
         return {"chapters": []}
 
-# ✅ Proxy PDF requests to Hugging Face (download full file into memory)
+# ✅ Proxy PDF requests to Hugging Face
 @app.get("/api/pdf/{folder_name}/{chapter_name}")
 async def serve_pdf(folder_name: str, chapter_name: str):
     pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
@@ -211,8 +211,11 @@ async def get_chat_history(user_id: int, book_id: str = None, chapter_id: str = 
 async def chat(request: SearchRequest, db: Session = Depends(get_db)):
     print(f"\n📥 Received: {request.question} | Book: {request.book_id} | Chapter: {request.chapter_id} | Session: {request.session_id}")
 
+    # ✅ Broader trigger detection for summary/broad questions
     is_summary_request = any(word in request.question.lower() for word in
-        ["explain", "summary", "summarize", "what is this chapter", "about", "full concept", "teach me"]
+        ["explain", "summary", "summarize", "what is this chapter", "about", "full concept",
+         "teach me", "what concepts", "what are the", "what topics", "overview",
+         "introduction", "describe", "why should i learn", "why learn"]
     )
 
     chunks = []
@@ -235,7 +238,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
             results = qclient.scroll(
                 collection_name="ncert_search",
                 scroll_filter=query_filter,
-                limit=1000
+                limit=2000
             )
             points = results[0]
 
@@ -246,9 +249,9 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
                 print(f"📚 Loaded {len(chunks)} chunks from chapter {request.chapter_id}")
             else:
                 print("⚠️ No chunks found in summary mode. Falling back to standard search...")
-                chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
+                chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
         else:
-            chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
+            chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
             print(f"📚 RAG found {len(chunks)} chunks")
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
@@ -359,26 +362,25 @@ async def get_progress(book_id: str, user_id: int, db: Session = Depends(get_db)
 
 # --- CLEAN AI FUNCTION ---
 def clean_with_llm(chunks, question, is_summary=False):
-    rag_context = "\n\n".join(chunks)
+    rag_context = "\n\n---\n\n".join(chunks)
 
     if is_summary:
         prompt = f"""You are a friendly, expert NCERT tutor for Indian school students.
-The student is asking for a summary or explanation of the current chapter.
 
 Student's Question: {question}
 
-FULL CHAPTER CONTEXT:
+FULL CHAPTER CONTEXT (from the actual textbook):
 {rag_context}
 
-RULES:
-- Provide a comprehensive, well-structured summary of the ENTIRE chapter.
-- Break down main themes, topics, and concepts.
+INSTRUCTIONS:
+- Give a COMPREHENSIVE and DETAILED answer (at least 3-5 paragraphs or a structured explanation).
+- Use ONLY information from the context above.
+- Explain concepts clearly with examples from the text.
 - Use simple language for a school student.
-- Do NOT mention page numbers.
-- Use clear headings or bullet points.
+- Do NOT mention page numbers, "Contents", or metadata.
+- Structure your answer with clear headings or bullet points if helpful.
 
-Answer:
-"""
+Answer:"""
     else:
         prompt = f"""You are a friendly, expert NCERT tutor for Indian school students.
 
@@ -387,13 +389,15 @@ Student's Question: {question}
 TEXTBOOK CONTEXT (Use ONLY this to answer):
 {rag_context}
 
-RULES:
-- Write a NEW, CLEAN, and SIMPLE answer in your own words.
+INSTRUCTIONS:
+- Give a DETAILED and COMPREHENSIVE answer (at least 2-3 paragraphs).
+- Explain your answer using evidence from the textbook context.
+- Do NOT give one-line answers. Provide reasoning and examples.
+- Use simple language for a school student.
 - IGNORE page numbers, "Contents", "Foreword", "Preface".
-- If the answer cannot be found in the context, say "I could not find the specific answer in this chapter's text."
+- If the answer truly cannot be found, say "I could not find the specific answer in this chapter's text."
 
-Answer:
-"""
+Answer:"""
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"]
     for model_name in models_to_try:
         try:
