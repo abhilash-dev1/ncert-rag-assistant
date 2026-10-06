@@ -9,10 +9,12 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
   const safeBookId = encodeURIComponent(bookId || '');
   const safeChapterId = encodeURIComponent(chapterId || '');
 
+  const API_BASE = 'https://ncert-rag-assistant-production.up.railway.app';
+
   // ✅ Reload notes when chapter changes
   useEffect(() => {
     if (!bookId || !chapterId) return;
-    fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
+    fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setNotes(data.notes || []))
       .catch(err => console.error("Failed to load notes:", err));
@@ -20,7 +22,7 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
 
   const addNote = () => {
     if (!noteInput.trim()) return;
-    fetch('http://localhost:8000/api/notes', {
+    fetch(`${API_BASE}/api/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -32,7 +34,7 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
     })
     .then(res => res.json())
     .then(() => {
-      fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
+      fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
         .then(res => res.json())
         .then(data => setNotes(data.notes || []));
     });
@@ -40,9 +42,9 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
   };
 
   const deleteNote = (id) => {
-    fetch(`http://localhost:8000/api/notes/${id}`, { method: 'DELETE' })
+    fetch(`${API_BASE}/api/notes/${id}`, { method: 'DELETE' })
       .then(() => {
-        fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
+        fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
           .then(res => res.json())
           .then(data => setNotes(data.notes || []));
       });
@@ -51,12 +53,12 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
   const startEdit = (note) => { setEditingId(note.id); setNoteInput(note.content); };
   const updateNote = () => {
     if (!noteInput.trim() || !editingId) return;
-    fetch('http://localhost:8000/api/notes', {
+    fetch(`${API_BASE}/api/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ book_id: bookId, chapter_id: chapterId, page_number: pageNumber, content: noteInput })
     }).then(() => {
-      fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
+      fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
         .then(res => res.json())
         .then(data => setNotes(data.notes || []));
     });

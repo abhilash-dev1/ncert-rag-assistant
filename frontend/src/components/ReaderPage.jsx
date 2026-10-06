@@ -58,8 +58,9 @@ export default function ReaderPage() {
 
   if (!book) return <div style={{ padding: '40px', textAlign: 'center' }}>Loading book...</div>;
 
+  // ✅ FIXED: Pointing PDF URL to Railway
   const pdfUrl = currentChapter
-    ? `http://localhost:8000/api/pdf/${encodeURIComponent(book.folder)}/${encodeURIComponent(currentChapter)}`
+    ? `https://ncert-rag-assistant-production.up.railway.app/api/pdf/${encodeURIComponent(book.folder)}/${encodeURIComponent(currentChapter)}`
     : null;
 
   return (

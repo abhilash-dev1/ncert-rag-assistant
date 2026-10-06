@@ -26,14 +26,14 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   // ✅ Load history filtered by book + chapter
   useEffect(() => {
     if (!bookId || !chapterId) return;
-    fetch(`http://localhost:8000/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
+    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setHistory(data.history || []))
       .catch(err => console.error("Failed to load history:", err));
   }, [userId, bookId, chapterId]);
 
   const refreshHistory = () => {
-    fetch(`http://localhost:8000/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
+    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setHistory(data.history || []));
   };
@@ -59,7 +59,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
     setMessageCount(prev => prev + 1);
 
     try {
-      const response = await fetch('http://localhost:8000/chat', {
+      // ✅ FIXED: Pointing to Railway URL
+      const response = await fetch('https://ncert-rag-assistant-production.up.railway.app/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -103,7 +104,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
 
   // ✅ Load a full session from history
   const loadChatFromHistory = (sessionId) => {
-    fetch(`http://localhost:8000/api/chat/${sessionId}`)
+    // ✅ FIXED: Pointing to Railway URL
+    fetch(`https://ncert-rag-assistant-production.up.railway.app/api/chat/${sessionId}`)
       .then(res => res.json())
       .then(data => {
         const loadedMessages = data.messages.map((msg, idx) => {
