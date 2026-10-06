@@ -5,7 +5,7 @@ from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
-from qdrant_client.models import Distance, VectorParams, PointStruct
+from qdrant_client.models import Distance, VectorParams, PointStruct, PayloadSchemaType
 from dotenv import load_dotenv
 
 # ✅ Force load .env from the exact backend folder
@@ -27,6 +27,23 @@ def get_embedding_model():
     if embedding_model is None:
         embedding_model = TextEmbedding(model_name=EMBEDDING_MODEL)
     return embedding_model
+
+def ensure_indexes(client):
+    """✅ Create keyword indexes for filtering (safe to call repeatedly)"""
+    try:
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="book_id",
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+        client.create_payload_index(
+            collection_name=COLLECTION_NAME,
+            field_name="chapter_id",
+            field_schema=PayloadSchemaType.KEYWORD,
+        )
+        print("✅ Payload indexes ensured for book_id and chapter_id")
+    except Exception as e:
+        print(f"⚠️ Index creation: {e}")
 
 def get_qdrant_client():
     global qdrant_client
@@ -50,6 +67,9 @@ def get_qdrant_client():
                 vectors_config=VectorParams(size=384, distance=Distance.COSINE),
             )
             print(f"✅ Created Qdrant collection: {COLLECTION_NAME}")
+        
+        # ✅ Ensure indexes exist
+        ensure_indexes(qdrant_client)
     return qdrant_client
 
 def clean_chunk_text(text):
@@ -127,16 +147,20 @@ def build_index(book_id=None):
 
     client = get_qdrant_client()
     
+    # ✅ Clear old collection, then recreate AND re-create indexes
     try:
         client.delete_collection(collection_name=COLLECTION_NAME)
         client.create_collection(
             collection_name=COLLECTION_NAME,
             vectors_config=VectorParams(size=384, distance=Distance.COSINE),
         )
-        print("🧹 Cleared old Qdrant collection.")
+        # ✅ MUST recreate indexes after deleting collection
+        ensure_indexes(client)
+        print("🧹 Cleared old Qdrant collection and recreated indexes.")
     except Exception as e:
         print(f"⚠️ Could not clear collection: {e}")
 
+    # ✅ Upload in batches
     batch_size = 100
     for i in range(0, len(all_chunks), batch_size):
         end_idx = min(i + batch_size, len(all_chunks))
