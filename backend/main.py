@@ -2,34 +2,40 @@ import os
 import re
 import json
 from datetime import datetime
+from pathlib import Path
 from dotenv import load_dotenv
+
+# ✅ Force load .env from exact folder
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
+
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
-from rag_search import build_index, search_similar, get_qdrant_client # ✅ Updated import
+from rag_search import build_index, search_similar, get_qdrant_client, get_vector_collection # ✅ Added get_vector_collection
 from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
 from google import genai
-
-load_dotenv()
 
 app = FastAPI(title="NCERT RAG (Gemini Tutor)")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"], # We will restrict this later
+    allow_origins=["*"], 
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-PDF_DIRECTORY = os.getenv("PDF_FOLDER", r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS")
-# Note: Static file serving for PDFs will need a cloud storage solution later, 
-# for now we will keep this line so it doesn't crash locally.
+# ✅ Check if PDF directory exists before mounting (prevents crash on Railway)
+PDF_DIRECTORY = os.getenv("PDF_FOLDER", "./PDFS")
 if os.path.exists(PDF_DIRECTORY):
     app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
+    print(f"✅ Mounted PDF directory: {PDF_DIRECTORY}")
+else:
+    print(f"⚠️ PDF directory not found at {PDF_DIRECTORY}. PDF viewer will not work, but Chat will.")
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
@@ -74,6 +80,8 @@ class ProgressCreate(BaseModel):
 @app.get("/api/textbooks")
 async def get_textbooks():
     textbooks = []
+    if not os.path.exists(PDF_DIRECTORY):
+        return {"textbooks": []}
     for folder_name in os.listdir(PDF_DIRECTORY):
         folder_path = os.path.join(PDF_DIRECTORY, folder_name)
         if os.path.isdir(folder_path):
@@ -152,7 +160,6 @@ async def get_chat_history(user_id: int, book_id: str = None, chapter_id: str = 
 async def chat(request: SearchRequest, db: Session = Depends(get_db)):
     print(f"\n📥 Received: {request.question} | Book: {request.book_id} | Chapter: {request.chapter_id} | Session: {request.session_id}")
 
-    # ✅ Detect broad/summary questions
     is_summary_request = any(word in request.question.lower() for word in 
         ["explain", "summary", "summarize", "what is this chapter", "about", "full concept", "teach me"]
     )
@@ -163,7 +170,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     try:
         if is_summary_request and request.book_id and request.chapter_id:
-            # ✅ SUMMARY MODE: Fetch ALL chunks for this specific chapter
             print("📖 Summary request detected. Fetching all chunks for this chapter...")
             collection = get_vector_collection()
             results = collection.get(
@@ -178,7 +184,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
                 print("⚠️ No chunks found in summary mode. Falling back to standard search...")
                 chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
         else:
-            # ✅ NORMAL MODE: Vector Search
             chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
             print(f"📚 RAG found {len(chunks)} chunks")
     except Exception as e:
@@ -201,13 +206,11 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
             print(f"⚠️ LLM Error: {e}")
             final_answer = ""
 
-    # ❌ WEB SEARCH FALLBACK REMOVED.
     if not final_answer or len(final_answer.strip()) < 10:
         final_answer = "I searched the textbook, but I couldn't find a clear answer to that specific question. Please try asking a more specific question about the chapter."
         print("❌ RAG failed. No web fallback used.")
         source_list = []
 
-    # ✅ Find or create session
     session = None
     if request.session_id:
         session = db.query(ChatSession).filter(ChatSession.id == request.session_id).first()
@@ -225,7 +228,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
         print(f"✨ Created new session: {session.id}")
 
     try:
-        # ✅ Store sources as JSON string
         db.add(ChatMessage(chat_session_id=session.id, sender='user', text=request.question))
         db.add(ChatMessage(chat_session_id=session.id, sender='ai', text=final_answer, sources=json.dumps(source_list)))
         db.commit()

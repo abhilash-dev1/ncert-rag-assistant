@@ -1,23 +1,22 @@
 ﻿import os
 import re
 import pdfplumber
+from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from dotenv import load_dotenv
 
-load_dotenv()
+# ✅ Force load .env from the exact backend folder
+env_path = Path(__file__).resolve().parent / ".env"
+load_dotenv(dotenv_path=env_path, override=True)
 
 # --- CONFIG ---
 PDF_FOLDER = os.getenv("PDF_FOLDER", r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS")
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 50
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
-
-# ✅ Qdrant Configuration
-QDRANT_URL = os.getenv("https://2cd37365-8851-4778-b10c-62191878b96f.sa-east-1-0.aws.cloud.qdrant.io")
-QDRANT_API_KEY = os.getenv("eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJhY2Nlc3MiOiJtIiwic3ViamVjdCI6ImFwaS1rZXk6ZGE1OTlmMGQtMjg4YS00NjdlLWE2YzctMzY1MDNlY2ZhZTkyIn0.HwMEIl53d3tXMEl7txCbYSCWF3OfXckh0POHQNlkrEk")
 COLLECTION_NAME = "ncert_search"
 
 embedding_model = None
@@ -32,9 +31,19 @@ def get_embedding_model():
 def get_qdrant_client():
     global qdrant_client
     if qdrant_client is None:
-        if not QDRANT_URL or not QDRANT_API_KEY:
-            raise ValueError("❌ QDRANT_URL and QDRANT_API_KEY must be set in environment variables.")
-        qdrant_client = QdrantClient(url=QDRANT_URL, api_key=QDRANT_API_KEY)
+        # ✅ Read the correct environment variable names
+        url = os.getenv("QDRANT_URL")
+        api_key = os.getenv("QDRANT_API_KEY")
+        
+        if not url or not api_key:
+            raise ValueError(f"❌ Missing env vars. URL={url}, KEY={'set' if api_key else 'missing'}. Check your .env file!")
+        
+        # ✅ Ensure the port :6333 is included
+        if not url.endswith(":6333") and ":" not in url.split("//")[-1]:
+            url = url.rstrip("/") + ":6333"
+            
+        print(f"🔌 Connecting to Qdrant: {url}")
+        qdrant_client = QdrantClient(url=url, api_key=api_key)
         
         # Create collection if it doesn't exist
         collections = qdrant_client.get_collections().collections

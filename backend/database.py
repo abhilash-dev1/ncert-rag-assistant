@@ -1,10 +1,12 @@
+import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
 from sqlalchemy.ext.declarative import declarative_base
 from sqlalchemy.orm import sessionmaker, relationship
 from datetime import datetime
 
 # --- SQLITE DATABASE ---
-DATABASE_URL = "sqlite:///C:/Downloads/ncert-rag-project-main/backend/ncert_rag.db"
+# ✅ Use a relative path so it works on Railway (Linux) and locally (Windows)
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ncert_rag.db")
 
 engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
