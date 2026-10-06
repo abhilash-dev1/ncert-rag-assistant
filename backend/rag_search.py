@@ -3,7 +3,7 @@ import re
 import pdfplumber
 from pathlib import Path
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-from sentence_transformers import SentenceTransformer
+from fastembed import TextEmbedding
 from qdrant_client import QdrantClient
 from qdrant_client.models import Distance, VectorParams, PointStruct
 from dotenv import load_dotenv
@@ -16,7 +16,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 PDF_FOLDER = os.getenv("PDF_FOLDER", r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS")
 CHUNK_SIZE = 300
 CHUNK_OVERLAP = 50
-EMBEDDING_MODEL = "all-MiniLM-L6-v2"
+EMBEDDING_MODEL = "sentence-transformers/all-MiniLM-L6-v2"
 COLLECTION_NAME = "ncert_search"
 
 embedding_model = None
@@ -25,27 +25,24 @@ qdrant_client = None
 def get_embedding_model():
     global embedding_model
     if embedding_model is None:
-        embedding_model = SentenceTransformer(EMBEDDING_MODEL)
+        embedding_model = TextEmbedding(model_name=EMBEDDING_MODEL)
     return embedding_model
 
 def get_qdrant_client():
     global qdrant_client
     if qdrant_client is None:
-        # ✅ Read the correct environment variable names
         url = os.getenv("QDRANT_URL")
         api_key = os.getenv("QDRANT_API_KEY")
         
         if not url or not api_key:
-            raise ValueError(f"❌ Missing env vars. URL={url}, KEY={'set' if api_key else 'missing'}. Check your .env file!")
+            raise ValueError(f"❌ Missing env vars. URL={url}, KEY={'set' if api_key else 'missing'}.")
         
-        # ✅ Ensure the port :6333 is included
         if not url.endswith(":6333") and ":" not in url.split("//")[-1]:
             url = url.rstrip("/") + ":6333"
             
         print(f"🔌 Connecting to Qdrant: {url}")
         qdrant_client = QdrantClient(url=url, api_key=api_key)
         
-        # Create collection if it doesn't exist
         collections = qdrant_client.get_collections().collections
         if not any(c.name == COLLECTION_NAME for c in collections):
             qdrant_client.create_collection(
@@ -103,7 +100,7 @@ def build_index(book_id=None):
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 for page_num, page in enumerate(pdf.pages):
-                    if page_num < 10: continue # Skip foreword/preface
+                    if page_num < 10: continue
                         
                     text = page.extract_text()
                     if text and text.strip():
@@ -126,11 +123,10 @@ def build_index(book_id=None):
 
     model = get_embedding_model()
     print("🔄 Generating embeddings...")
-    embeddings = model.encode(all_chunks, show_progress_bar=True)
+    embeddings = list(model.embed(all_chunks))
 
     client = get_qdrant_client()
     
-    # ✅ Clear old data in Qdrant
     try:
         client.delete_collection(collection_name=COLLECTION_NAME)
         client.create_collection(
@@ -141,7 +137,6 @@ def build_index(book_id=None):
     except Exception as e:
         print(f"⚠️ Could not clear collection: {e}")
 
-    # ✅ Upload to Qdrant in batches
     batch_size = 100
     for i in range(0, len(all_chunks), batch_size):
         end_idx = min(i + batch_size, len(all_chunks))
@@ -165,10 +160,9 @@ def build_index(book_id=None):
 
 def search_similar(query, book_id=None, top_k=5):
     model = get_embedding_model()
-    query_embedding = model.encode([query])[0]
+    query_embedding = list(model.embed([query]))[0]
     client = get_qdrant_client()
     
-    # Build filter
     from qdrant_client.models import Filter, FieldCondition, MatchValue
     query_filter = None
     if book_id:
