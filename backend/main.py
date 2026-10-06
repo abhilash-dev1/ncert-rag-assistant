@@ -15,7 +15,7 @@ from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
-from rag_search import build_index, search_similar, get_qdrant_client, get_vector_collection # ✅ Added get_vector_collection
+from rag_search import build_index, search_similar, get_qdrant_client
 from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
 from google import genai
 
@@ -29,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Check if PDF directory exists before mounting (prevents crash on Railway)
 PDF_DIRECTORY = os.getenv("PDF_FOLDER", "./PDFS")
 if os.path.exists(PDF_DIRECTORY):
     app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
@@ -170,20 +169,36 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     try:
         if is_summary_request and request.book_id and request.chapter_id:
+            # ✅ SUMMARY MODE: Fetch ALL chunks for this specific chapter from Qdrant
             print("📖 Summary request detected. Fetching all chunks for this chapter...")
-            collection = get_vector_collection()
-            results = collection.get(
-                where={"$and": [{"book_id": request.book_id}, {"chapter_id": request.chapter_id}]}
+            qclient = get_qdrant_client()
+            from qdrant_client.models import Filter, FieldCondition, MatchValue
+            
+            query_filter = Filter(
+                must=[
+                    FieldCondition(key="book_id", match=MatchValue(value=request.book_id)),
+                    FieldCondition(key="chapter_id", match=MatchValue(value=request.chapter_id))
+                ]
             )
-            if results["documents"]:
-                chunks = results["documents"]
-                metadata = results["metadatas"]
+            
+            # Use Qdrant's scroll method to get all matching points
+            results = qclient.scroll(
+                collection_name="ncert_search",
+                scroll_filter=query_filter,
+                limit=1000
+            )
+            points = results[0]
+            
+            if points:
+                chunks = [p.payload["text"] for p in points]
+                metadata = [{"book_id": p.payload["book_id"], "chapter_id": p.payload["chapter_id"], "page": p.payload["page"]} for p in points]
                 scores = [0.9] * len(chunks)
                 print(f"📚 Loaded {len(chunks)} chunks from chapter {request.chapter_id}")
             else:
                 print("⚠️ No chunks found in summary mode. Falling back to standard search...")
                 chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
         else:
+            # ✅ NORMAL MODE: Vector Search
             chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
             print(f"📚 RAG found {len(chunks)} chunks")
     except Exception as e:
