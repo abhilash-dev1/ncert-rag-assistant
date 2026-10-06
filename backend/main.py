@@ -11,7 +11,7 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
@@ -79,7 +79,6 @@ class ProgressCreate(BaseModel):
 async def get_textbooks():
     try:
         async with httpx.AsyncClient(timeout=60) as http_client:
-            # 1. Get top-level folders
             response = await http_client.get(HF_TREE_URL)
             response.raise_for_status()
             items = response.json()
@@ -127,22 +126,29 @@ async def get_chapters(folder_name: str):
         print(f"⚠️ Error fetching chapters: {e}")
         return {"chapters": []}
 
-# ✅ Proxy PDF requests to Hugging Face
+# ✅ Proxy PDF requests to Hugging Face (download full file into memory)
 @app.get("/api/pdf/{folder_name}/{chapter_name}")
 async def serve_pdf(folder_name: str, chapter_name: str):
     pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
-    print(f"📄 Proxying PDF: {pdf_url}")
+    print(f"📄 Fetching PDF: {pdf_url}")
     try:
-        async with httpx.AsyncClient(timeout=120) as http_client:
-            req = http_client.build_request("GET", pdf_url, follow_redirects=True)
-            response = await http_client.send(req, stream=True)
+        async with httpx.AsyncClient(timeout=180, follow_redirects=True) as http_client:
+            response = await http_client.get(pdf_url)
             if response.status_code != 200:
-                raise HTTPException(status_code=response.status_code, detail="PDF not found on HF")
-            return StreamingResponse(
-                response.aiter_bytes(),
+                print(f"⚠️ HF returned {response.status_code}")
+                raise HTTPException(status_code=response.status_code, detail="PDF not found on Hugging Face")
+            
+            print(f"✅ Served PDF: {chapter_name} ({len(response.content)} bytes)")
+            return Response(
+                content=response.content,
                 media_type="application/pdf",
-                headers={"Content-Disposition": f"inline; filename={chapter_name}"}
+                headers={
+                    "Content-Disposition": f"inline; filename={chapter_name}",
+                    "Access-Control-Allow-Origin": "*"
+                }
             )
+    except HTTPException:
+        raise
     except Exception as e:
         print(f"⚠️ Error serving PDF: {e}")
         raise HTTPException(status_code=500, detail="Failed to fetch PDF")
