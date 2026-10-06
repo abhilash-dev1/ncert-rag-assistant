@@ -5,9 +5,10 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from sentence_transformers import SentenceTransformer
 import chromadb
 
+# --- CONFIG ---
 PDF_FOLDER = r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS"
-CHUNK_SIZE = 1000  # ✅ Increased from 400 to 1000 for better context
-CHUNK_OVERLAP = 150
+CHUNK_SIZE = 300
+CHUNK_OVERLAP = 50
 EMBEDDING_MODEL = "all-MiniLM-L6-v2"
 
 embedding_model = None
@@ -29,21 +30,14 @@ def get_vector_collection():
     return collection
 
 def clean_chunk_text(text):
-    """Aggressively remove all metadata and OCR garbage"""
-    # Remove page numbers like "37", "74"
-    text = re.sub(r'\b\d{1,3}\b', ' ', text)
-    # Remove "Reprint 2026-27"
+    text = re.sub(r'^\s*\d{1,3}\s*$', '', text, flags=re.MULTILINE)
     text = re.sub(r'Reprint\s*\d{4}-\d{2}', ' ', text)
-    # Remove file names like "Chapter 5.indd"
     text = re.sub(r'\w+\.indd', ' ', text)
-    # Remove dates
     text = re.sub(r'\d{2}/\d{2}/\d{4}\s*\d{2}:\d{2}:\d{2}', ' ', text)
     text = re.sub(r'\d{2}-\d{2}-\d{4}\s*\d{2}:\d{2}:\d{2}', ' ', text)
-    # Remove OCR garbage (ll, ii, ff, etc.)
     text = re.sub(r'\b(?:ll|ii|ff|vv|oo|pp|rr|ss|tt)\b', ' ', text)
-    # Remove "Contents", "Foreword", "Preface", "Rationalisation" etc.
-    text = re.sub(r'\b(?:Contents|Foreword|Preface|Rationalisation|Rationalization|Glossary)\b', ' ', text)
-    # Collapse multiple spaces
+    text = re.sub(r'\b(?:Contents|Foreword|Preface|Rationalisation|Glossary|Overview)\b', ' ', text)
+    text = re.sub(r'(Fill in the blanks|Choose the correct option|Match the following|State whether true or false)', ' ', text)
     text = re.sub(r'\s+', ' ', text).strip()
     return text
 
@@ -65,11 +59,7 @@ def build_index(book_id=None):
                     pdf_files.append(os.path.join(root, file))
 
     print(f"📂 Found {len(pdf_files)} PDF files.")
-
-    if not pdf_files:
-        print("❌ No PDF files found.")
-        return
-
+    
     text_splitter = RecursiveCharacterTextSplitter(
         chunk_size=CHUNK_SIZE,
         chunk_overlap=CHUNK_OVERLAP,
@@ -82,20 +72,27 @@ def build_index(book_id=None):
     for pdf_path in pdf_files:
         subject_folder = os.path.basename(os.path.dirname(pdf_path))
         book_name = subject_folder
+        chapter_name = os.path.basename(pdf_path)
+        
         try:
             with pdfplumber.open(pdf_path) as pdf:
                 for page_num, page in enumerate(pdf.pages):
+                    # ✅ SKIP THE FIRST 10 PAGES (Foreword, Preface, Copyright)
+                    if page_num < 10:
+                        continue
+                        
                     text = page.extract_text()
                     if text and text.strip():
-                        # ✅ Clean text BEFORE splitting
                         text = clean_chunk_text(text)
                         page_chunks = text_splitter.split_text(text)
                         for chunk in page_chunks:
-                            all_chunks.append(chunk)
-                            all_metadata.append({
-                                "book_id": book_name,
-                                "page": page_num + 1
-                            })
+                            if len(chunk) > 50:
+                                all_chunks.append(chunk)
+                                all_metadata.append({
+                                    "book_id": book_name,
+                                    "chapter_id": chapter_name,
+                                    "page": page_num + 1
+                                })
         except Exception as e:
             print(f"⚠️ Failed to read {pdf_path}: {e}")
 
@@ -108,8 +105,12 @@ def build_index(book_id=None):
     embeddings = model.encode(all_chunks, show_progress_bar=True)
 
     collection = get_vector_collection()
-    ids = [f"{m['book_id']}_p{m['page']}_c{i}" for i, m in enumerate(all_metadata)]
-    collection.delete(where={"book_id": {"$ne": "dummy"}})
+    ids = [f"{m['book_id']}_{m['chapter_id']}_p{m['page']}_c{i}" for i, m in enumerate(all_metadata)]
+    
+    try:
+        collection.delete(where={"book_id": {"$ne": "dummy"}})
+    except:
+        pass
 
     batch_size = 5000
     for i in range(0, len(all_chunks), batch_size):
@@ -124,7 +125,7 @@ def build_index(book_id=None):
 
     print(f"✅ Indexed {len(all_chunks)} chunks.")
 
-def search_similar(query, book_id=None, top_k=3):
+def search_similar(query, book_id=None, top_k=5):
     model = get_embedding_model()
     query_embedding = model.encode([query])[0]
     collection = get_vector_collection()
@@ -139,5 +140,14 @@ def search_similar(query, book_id=None, top_k=3):
     if not results["documents"][0]:
         return [], [], []
 
-    # ✅ Return cleaned chunks (already cleaned during indexing)
-    return results["documents"][0], results["metadatas"][0], [0.9, 0.8, 0.7, 0.6, 0.5][:top_k]
+    cleaned_chunks = [clean_chunk_text(chunk) for chunk in results["documents"][0]]
+    
+    valid_chunks = []
+    valid_metadata = []
+    for chunk, meta in zip(cleaned_chunks, results["metadatas"][0]):
+        if len(chunk) > 30:
+            valid_chunks.append(chunk)
+            valid_metadata.append(meta)
+
+    scores = [0.9, 0.8, 0.7, 0.6, 0.5][:len(valid_chunks)]
+    return valid_chunks, valid_metadata, scores

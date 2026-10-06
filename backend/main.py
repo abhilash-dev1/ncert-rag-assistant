@@ -1,16 +1,18 @@
 import os
 import re
+import json
+from datetime import datetime
 from dotenv import load_dotenv
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel
+from typing import Optional
 from sqlalchemy.orm import Session
-from rag_search import build_index, search_similar
+from rag_search import build_index, search_similar, get_vector_collection
 from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
 from google import genai
 
-# ✅ Load environment variables (API key)
 load_dotenv()
 
 app = FastAPI(title="NCERT RAG (Gemini Tutor)")
@@ -24,11 +26,9 @@ app.add_middleware(
 )
 
 PDF_DIRECTORY = r"C:\DOWNLOADS\NCERT-RAG-PROJECT-MAIN\BACKEND\PDFS"
-
 app.mount("/api/pdf", StaticFiles(directory=PDF_DIRECTORY), name="pdfs")
 app.mount("/api/cover", StaticFiles(directory=PDF_DIRECTORY), name="covers")
 
-# ✅ Load Gemini API key from .env
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
@@ -41,22 +41,26 @@ async def startup_event():
 # --- REQUEST MODELS ---
 class SearchRequest(BaseModel):
     question: str
-    book_id: str = None
+    book_id: Optional[str] = None
+    chapter_id: Optional[str] = None
+    session_id: Optional[int] = None
 
 class SearchResponse(BaseModel):
     answer: str
     sources: list[str]
     chunks: list[str] = []
     scores: list[float] = []
+    session_id: Optional[int] = None
 
 class UserCreate(BaseModel):
     email: str
     name: str
     google_id: str
-    profile_pic: str = None
+    profile_pic: Optional[str] = None
 
 class NoteCreate(BaseModel):
     book_id: str
+    chapter_id: Optional[str] = None
     page_number: int
     content: str
 
@@ -94,13 +98,7 @@ async def google_auth(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.google_id == user.google_id).first()
     if existing:
         return {"message": "User already exists", "user_id": existing.id}
-    
-    new_user = User(
-        email=user.email,
-        name=user.name,
-        google_id=user.google_id,
-        profile_pic=user.profile_pic
-    )
+    new_user = User(email=user.email, name=user.name, google_id=user.google_id, profile_pic=user.profile_pic)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
@@ -111,104 +109,134 @@ async def get_user(user_id: int, db: Session = Depends(get_db)):
     user = db.query(User).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    return {
-        "id": user.id,
-        "email": user.email,
-        "name": user.name,
-        "profile_pic": user.profile_pic
-    }
+    return {"id": user.id, "email": user.email, "name": user.name, "profile_pic": user.profile_pic}
 
 # --- CHAT APIs ---
-@app.post("/api/chat/new")
-async def create_new_chat(user_id: int, book_id: str = None, db: Session = Depends(get_db)):
-    new_session = ChatSession(
-        user_id=user_id,
-        book_id=book_id,
-        title="New Chat"
-    )
-    db.add(new_session)
-    db.commit()
-    db.refresh(new_session)
-    return {"session_id": new_session.id, "title": new_session.title}
-
 @app.get("/api/chat/{session_id}")
 async def get_chat_by_id(session_id: int, db: Session = Depends(get_db)):
     session = db.query(ChatSession).filter(ChatSession.id == session_id).first()
     if not session:
         raise HTTPException(status_code=404, detail="Chat not found")
-    
-    messages = db.query(ChatMessage).filter(ChatMessage.chat_session_id == session.id).all()
+    messages = db.query(ChatMessage).filter(ChatMessage.chat_session_id == session.id).order_by(ChatMessage.id).all()
     return {
         "session_id": session.id,
         "title": session.title,
-        "messages": [{"sender": m.sender, "text": m.text, "sources": m.sources} for m in messages]
+        "messages": [{"id": m.id, "sender": m.sender, "text": m.text, "sources": m.sources} for m in messages]
     }
 
 @app.get("/api/chat/history/{user_id}")
-async def get_chat_history(user_id: int, db: Session = Depends(get_db)):
-    sessions = db.query(ChatSession).filter(ChatSession.user_id == user_id).order_by(ChatSession.created_at.desc()).limit(50).all()
-    
+async def get_chat_history(user_id: int, book_id: str = None, chapter_id: str = None, db: Session = Depends(get_db)):
+    query = db.query(ChatSession).filter(ChatSession.user_id == user_id)
+    if book_id:
+        query = query.filter(ChatSession.book_id == book_id)
+    if chapter_id:
+        query = query.filter(ChatSession.chapter_id == chapter_id)
+    sessions = query.order_by(ChatSession.created_at.desc()).limit(50).all()
+
     history = []
     for session in sessions:
         messages = db.query(ChatMessage).filter(ChatMessage.chat_session_id == session.id).all()
+        if len(messages) == 0:
+            continue
         history.append({
             "session_id": session.id,
             "title": session.title,
             "created_at": session.created_at.isoformat() if session.created_at else None,
             "messages": [{"sender": m.sender, "text": m.text, "sources": m.sources} for m in messages]
         })
-    
     return {"history": history}
 
 @app.post("/chat", response_model=SearchResponse)
 async def chat(request: SearchRequest, db: Session = Depends(get_db)):
-    chunks, metadata, scores = search_similar(
-        query=request.question,
-        book_id=request.book_id,
-        top_k=5
+    print(f"\n📥 Received: {request.question} | Book: {request.book_id} | Chapter: {request.chapter_id} | Session: {request.session_id}")
+
+    # ✅ Detect broad/summary questions
+    is_summary_request = any(word in request.question.lower() for word in 
+        ["explain", "summary", "summarize", "what is this chapter", "about", "full concept", "teach me"]
     )
-    
-    if not chunks:
-        return SearchResponse(
-            answer="I couldn't find any information about this in the NCERT textbooks.",
-            sources=[]
+
+    chunks = []
+    metadata = []
+    scores = []
+
+    try:
+        if is_summary_request and request.book_id and request.chapter_id:
+            # ✅ SUMMARY MODE: Fetch ALL chunks for this specific chapter
+            print("📖 Summary request detected. Fetching all chunks for this chapter...")
+            collection = get_vector_collection()
+            results = collection.get(
+                where={"$and": [{"book_id": request.book_id}, {"chapter_id": request.chapter_id}]}
+            )
+            if results["documents"]:
+                chunks = results["documents"]
+                metadata = results["metadatas"]
+                scores = [0.9] * len(chunks)
+                print(f"📚 Loaded {len(chunks)} chunks from chapter {request.chapter_id}")
+            else:
+                print("⚠️ No chunks found in summary mode. Falling back to standard search...")
+                chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
+        else:
+            # ✅ NORMAL MODE: Vector Search
+            chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=5)
+            print(f"📚 RAG found {len(chunks)} chunks")
+    except Exception as e:
+        print(f"⚠️ Search Error: {e}")
+        chunks, metadata, scores = [], [], []
+
+    final_answer = ""
+    source_list = []
+
+    if chunks:
+        try:
+            if is_summary_request and metadata:
+                paired = sorted(zip(chunks, metadata), key=lambda x: x[1].get('page', 0))
+                chunks = [p[0] for p in paired]
+                metadata = [p[1] for p in paired]
+
+            final_answer = clean_with_llm(chunks, request.question, is_summary_request)
+            source_list = list(set([f"Book: {m.get('book_id', 'Unknown')}, Page: {m.get('page', '?')}" for m in metadata]))
+        except Exception as e:
+            print(f"⚠️ LLM Error: {e}")
+            final_answer = ""
+
+    # ❌ WEB SEARCH FALLBACK REMOVED.
+    if not final_answer or len(final_answer.strip()) < 10:
+        final_answer = "I searched the textbook, but I couldn't find a clear answer to that specific question. Please try asking a more specific question about the chapter."
+        print("❌ RAG failed. No web fallback used.")
+        source_list = []
+
+    # ✅ Find or create session
+    session = None
+    if request.session_id:
+        session = db.query(ChatSession).filter(ChatSession.id == request.session_id).first()
+
+    if not session:
+        session = ChatSession(
+            user_id=1,
+            book_id=request.book_id,
+            chapter_id=request.chapter_id,
+            title=request.question[:30] + '...'
         )
-    
-    final_answer = clean_with_llm(chunks, request.question)
-    
-    source_list = list(set([f"Book: {m['book_id']}, Page: {m['page']}" for m in metadata]))
-    
-    # Save to database
-    session = ChatSession(
-        user_id=1,
-        book_id=request.book_id,
-        title=request.question[:30] + '...'
-    )
-    db.add(session)
-    db.commit()
-    db.refresh(session)
-    
-    user_msg = ChatMessage(
-        chat_session_id=session.id,
-        sender='user',
-        text=request.question
-    )
-    db.add(user_msg)
-    
-    ai_msg = ChatMessage(
-        chat_session_id=session.id,
-        sender='ai',
-        text=final_answer,
-        sources=str(source_list)
-    )
-    db.add(ai_msg)
-    db.commit()
+        db.add(session)
+        db.commit()
+        db.refresh(session)
+        print(f"✨ Created new session: {session.id}")
+
+    try:
+        # ✅ Store sources as JSON string
+        db.add(ChatMessage(chat_session_id=session.id, sender='user', text=request.question))
+        db.add(ChatMessage(chat_session_id=session.id, sender='ai', text=final_answer, sources=json.dumps(source_list)))
+        db.commit()
+        print(f"✅ Saved messages to session: {session.id}")
+    except Exception as e:
+        print(f"⚠️ DB Error: {e}")
 
     return SearchResponse(
-        answer=final_answer,
-        sources=source_list,
-        chunks=chunks,
-        scores=scores
+        answer=final_answer, 
+        sources=source_list, 
+        chunks=chunks[:5], 
+        scores=scores[:5],
+        session_id=session.id
     )
 
 # --- NOTES APIs ---
@@ -217,6 +245,7 @@ async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
     new_note = Note(
         user_id=1,
         book_id=note.book_id,
+        chapter_id=note.chapter_id,
         page_number=note.page_number,
         content=note.content
     )
@@ -226,8 +255,11 @@ async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
     return {"message": "Note created", "note_id": new_note.id}
 
 @app.get("/api/notes/{book_id}/{user_id}")
-async def get_notes(book_id: str, user_id: int, db: Session = Depends(get_db)):
-    notes = db.query(Note).filter(Note.book_id == book_id, Note.user_id == user_id).all()
+async def get_notes(book_id: str, user_id: int, chapter_id: str = None, db: Session = Depends(get_db)):
+    query = db.query(Note).filter(Note.book_id == book_id, Note.user_id == user_id)
+    if chapter_id:
+        query = query.filter(Note.chapter_id == chapter_id)
+    notes = query.all()
     return {"notes": [{"id": n.id, "page": n.page_number, "content": n.content} for n in notes]}
 
 @app.delete("/api/notes/{note_id}")
@@ -242,87 +274,73 @@ async def delete_note(note_id: int, db: Session = Depends(get_db)):
 # --- PROGRESS APIs ---
 @app.post("/api/progress")
 async def save_progress(progress: ProgressCreate, db: Session = Depends(get_db)):
-    existing = db.query(BookAccess).filter(
-        BookAccess.user_id == 1,
-        BookAccess.book_id == progress.book_id
-    ).first()
-    
+    existing = db.query(BookAccess).filter(BookAccess.user_id == 1, BookAccess.book_id == progress.book_id).first()
     if existing:
         existing.last_page = progress.last_page
         existing.last_opened = datetime.utcnow()
     else:
-        new_progress = BookAccess(
-            user_id=1,
-            book_id=progress.book_id,
-            last_page=progress.last_page
-        )
-        db.add(new_progress)
-    
+        db.add(BookAccess(user_id=1, book_id=progress.book_id, last_page=progress.last_page))
     db.commit()
     return {"message": "Progress saved"}
 
 @app.get("/api/progress/{book_id}/{user_id}")
 async def get_progress(book_id: str, user_id: int, db: Session = Depends(get_db)):
-    progress = db.query(BookAccess).filter(
-        BookAccess.book_id == book_id,
-        BookAccess.user_id == user_id
-    ).first()
+    progress = db.query(BookAccess).filter(BookAccess.book_id == book_id, BookAccess.user_id == user_id).first()
     if progress:
         return {"last_page": progress.last_page}
     return {"last_page": 1}
 
 # --- CLEAN AI FUNCTION ---
-def clean_with_llm(chunks, question):
-    context = "\n\n".join(chunks)
-    q_lower = question.lower()
+def clean_with_llm(chunks, question, is_summary=False):
+    rag_context = "\n\n".join(chunks)
+    
+    if is_summary:
+        prompt = f"""
+You are a friendly, expert NCERT tutor for Indian school students.
+The student is asking for a summary or explanation of the current chapter.
 
-    if any(word in q_lower for word in ["short", "quick", "sum", "brief", "simple", "bullet", "small"]):
-        size_instruction = "Keep the answer very short. Maximum 2-3 sentences."
-    elif any(word in q_lower for word in ["detail", "thorough", "deep", "elaborate", "full", "explain everything", "large", "long"]):
-        size_instruction = "Provide a detailed, thorough answer. Maximum 300 words."
+Student's Question: {question}
+
+FULL CHAPTER CONTEXT (This is the entire chapter text):
+{rag_context}
+
+IMPORTANT RULES:
+- Provide a comprehensive, well-structured summary of the ENTIRE chapter based on the context above.
+- Break down the main themes, topics, and concepts.
+- Use simple, engaging language appropriate for a school student.
+- Do NOT mention page numbers or metadata.
+- Structure your answer with clear headings or bullet points.
+
+Answer:
+"""
     else:
-        size_instruction = "Provide a clear, focused answer within 150 words."
-
-    if any(word in q_lower for word in ["list", "types", "causes", "factors", "reasons", "features", "advantages", "disadvantages"]):
-        structure_instruction = "Answer using clear bullet points."
-    elif any(word in q_lower for word in ["timeline", "history", "process", "evolution", "sequence", "steps", "how did"]):
-        structure_instruction = "Answer in chronological order or step-by-step sequence."
-    elif any(word in q_lower for word in ["what is", "define", "meaning", "describe", "explain", "tell me about"]):
-        structure_instruction = "Start with a clear definition, then explain briefly."
-    else:
-        structure_instruction = "Write a simple, clear, well-structured paragraph."
-
-    prompt = f"""
-You are a friendly, expert NCERT Social Studies tutor for Indian school students.
+        prompt = f"""
+You are a friendly, expert NCERT tutor for Indian school students.
 
 Student's Question: {question}
 
 TEXTBOOK CONTEXT (Use ONLY this to answer):
-{context}
-
-INSTRUCTIONS FOR SIZE: {size_instruction}
-INSTRUCTIONS FOR STRUCTURE: {structure_instruction}
+{rag_context}
 
 IMPORTANT RULES:
-- **DO NOT copy or repeat the raw context text.**
-- **WRITE a NEW, CLEAN, and SIMPLE answer** in your own words.
-- **IGNORE all page numbers, random numbers, "Contents", "Foreword", "Preface", "Chapter", "Reprint 2026", "LEADERS OF THE", "SOVIET UNION" etc.**
-- If the context is confusing or doesn't make sense, say: "I found some information, but it's a bit unclear. Here's what I understand..."
-- Use simple language that a 12th-grade student can understand.
-- Keep your answer short and to the point.
+- Write a NEW, CLEAN, and SIMPLE answer in your own words.
+- IGNORE page numbers, "Contents", "Foreword", "Preface", metadata.
+- Use simple language for a student.
+- If the answer truly cannot be found in the context, say "I could not find the specific answer in this chapter's text."
 
-Now, write the final answer for the student:
+Answer:
 """
-
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.0-flash",
-            contents=prompt
-        )
-        return response.text
-    except Exception as e:
-        print(f"⚠️ Gemini Error: {e}")
-        return " ".join(chunks)
+    models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"]
+    for model_name in models_to_try:
+        try:
+            response = client.models.generate_content(model=model_name, contents=prompt)
+            if response.text and len(response.text.strip()) > 10:
+                print(f"✅ Model '{model_name}' worked!")
+                return response.text
+        except Exception as e:
+            print(f"⚠️ Model '{model_name}' failed: {e}")
+            continue
+    return ""
 
 @app.get("/")
 async def root():

@@ -1,3 +1,21 @@
+# ==========================
+# 1. Python / Backend Exclusions
+# ==========================
+__pycache__/
+*.py[cod]
+*$py.class
+.env
+venv/
+env/
+ENV/
+chroma_db/
+ncert_rag.db
+*.sqlite3
+.pytest_cache/
+
+# ==========================
+# 2. Node / Frontend Exclusions
+# ==========================
 # Logs
 logs
 *.log
@@ -7,11 +25,24 @@ yarn-error.log*
 pnpm-debug.log*
 lerna-debug.log*
 
+# Dependencies and builds
 node_modules
 dist
 dist-ssr
+build/
 *.local
 
+# ==========================
+# 3. Project Specific (Crucial!)
+# ==========================
+# Ignore the huge PDF and ChromaDB folders so GitHub doesn't reject the push
+backend/PDFS/
+backend/chroma_db/
+backend/__pycache__/
+
+# ==========================
+# 4. Editor and OS Files
+# ==========================
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

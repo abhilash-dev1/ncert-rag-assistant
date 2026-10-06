@@ -1,73 +1,70 @@
 import { useState, useEffect } from 'react';
 import { FaStickyNote, FaTrash, FaEdit } from 'react-icons/fa';
 
-export default function NotesPanel({ bookId, pageNumber, userId = 1, bookTitle }) {
+export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, bookTitle }) {
   const [notes, setNotes] = useState([]);
   const [noteInput, setNoteInput] = useState('');
   const [editingId, setEditingId] = useState(null);
 
-  // Load notes from DATABASE (filtered by bookId)
+  const safeBookId = encodeURIComponent(bookId || '');
+  const safeChapterId = encodeURIComponent(chapterId || '');
+
+  // ✅ Reload notes when chapter changes
   useEffect(() => {
-    fetch(`http://localhost:8000/api/notes/${bookId}/${userId}`)
+    if (!bookId || !chapterId) return;
+    fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
       .then(res => res.json())
       .then(data => setNotes(data.notes || []))
       .catch(err => console.error("Failed to load notes:", err));
-  }, [bookId, userId]);
+  }, [bookId, chapterId, userId]);
 
   const addNote = () => {
     if (!noteInput.trim()) return;
-    
     fetch('http://localhost:8000/api/notes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ book_id: bookId, page_number: pageNumber, content: noteInput })
+      body: JSON.stringify({
+        book_id: bookId,
+        chapter_id: chapterId,
+        page_number: pageNumber,
+        content: noteInput
+      })
     })
     .then(res => res.json())
     .then(() => {
-      fetch(`http://localhost:8000/api/notes/${bookId}/${userId}`)
+      fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
         .then(res => res.json())
         .then(data => setNotes(data.notes || []));
     });
-    
     setNoteInput('');
   };
 
   const deleteNote = (id) => {
     fetch(`http://localhost:8000/api/notes/${id}`, { method: 'DELETE' })
       .then(() => {
-        fetch(`http://localhost:8000/api/notes/${bookId}/${userId}`)
+        fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
           .then(res => res.json())
           .then(data => setNotes(data.notes || []));
       });
   };
 
-  const startEdit = (note) => {
-    setEditingId(note.id);
-    setNoteInput(note.content);
-  };
-
+  const startEdit = (note) => { setEditingId(note.id); setNoteInput(note.content); };
   const updateNote = () => {
     if (!noteInput.trim() || !editingId) return;
-    
     fetch('http://localhost:8000/api/notes', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ book_id: bookId, page_number: pageNumber, content: noteInput })
-    })
-    .then(() => {
-      fetch(`http://localhost:8000/api/notes/${bookId}/${userId}`)
+      body: JSON.stringify({ book_id: bookId, chapter_id: chapterId, page_number: pageNumber, content: noteInput })
+    }).then(() => {
+      fetch(`http://localhost:8000/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
         .then(res => res.json())
         .then(data => setNotes(data.notes || []));
     });
-    
     setNoteInput('');
     setEditingId(null);
   };
 
-  const cancelEdit = () => {
-    setNoteInput('');
-    setEditingId(null);
-  };
+  const cancelEdit = () => { setNoteInput(''); setEditingId(null); };
 
   return (
     <div style={{ background: '#fffdf5', height: '100%', borderRadius: '12px', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
@@ -75,7 +72,7 @@ export default function NotesPanel({ bookId, pageNumber, userId = 1, bookTitle }
         <FaStickyNote size={18} />
         <div>
           <div style={{ fontWeight: 'bold' }}>My Notes</div>
-          <div style={{ fontSize: '11px', opacity: 0.8 }}>{bookTitle || 'Notes'}</div>
+          <div style={{ fontSize: '11px', opacity: 0.8 }}>{bookTitle} — {chapterId}</div>
         </div>
       </div>
 
@@ -83,7 +80,7 @@ export default function NotesPanel({ bookId, pageNumber, userId = 1, bookTitle }
         {notes.length === 0 && (
           <div style={{ textAlign: 'center', color: '#999', marginTop: '30px' }}>
             <FaStickyNote size={40} style={{ marginBottom: '10px', color: '#38a169' }} />
-            <p>No notes yet for this book.</p>
+            <p>No notes yet for this chapter.</p>
           </div>
         )}
         {notes.map((note) => (
@@ -101,7 +98,7 @@ export default function NotesPanel({ bookId, pageNumber, userId = 1, bookTitle }
       </div>
 
       <div style={{ padding: '12px', background: 'white', borderTop: '1px solid #e0e0e0' }}>
-        <textarea value={noteInput} onChange={(e) => setNoteInput(e.target.value)} rows="2" placeholder="Write a note..." style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', resize: 'none' }} />
+        <textarea value={noteInput} onChange={(e) => setNoteInput(e.target.value)} rows="2" placeholder={`Write a note for ${chapterId}...`} style={{ width: '100%', padding: '8px', borderRadius: '8px', border: '1px solid #ccc', resize: 'none' }} />
         <div style={{ display: 'flex', gap: '8px', marginTop: '8px' }}>
           <button onClick={editingId ? updateNote : addNote} style={{ flex: 1, padding: '8px', background: editingId ? '#2b6cb0' : '#38a169', color: 'white', border: 'none', borderRadius: '8px', cursor: 'pointer', fontWeight: 'bold' }}>
             {editingId ? 'Update' : 'Add'}

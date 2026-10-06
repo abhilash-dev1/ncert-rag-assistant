@@ -6,6 +6,23 @@ import { jwtDecode } from 'jwt-decode';
 
 const GOOGLE_CLIENT_ID = "332298862506-s6cb3gnhvcbamvvb498hcji62ldto15n.apps.googleusercontent.com";
 
+// Beautiful color palette for book covers
+const coverColors = [
+  '#2C3E50', '#E74C3C', '#3498DB', '#27AE60', '#8E44AD',
+  '#D35400', '#16A085', '#C0392B', '#2980B9', '#F39C12'
+];
+
+// Subject-based emojis
+const subjectIcons = {
+  'History': '🏛️',
+  'Geography': '🌍',
+  'Civics': '⚖️',
+  'Economics': '📈',
+  'Sociology': '👥',
+  'Political Science': '🏛️',
+  'Social Science': '📚'
+};
+
 function LibraryContent() {
   const [selectedClass, setSelectedClass] = useState('all');
   const [books, setBooks] = useState([]);
@@ -101,7 +118,6 @@ function LibraryContent() {
             <li>Click on any <strong>Textbook</strong> to open the Reader.</li>
             <li>In the Reader, click on any <strong>Chapter</strong> to open that chapter's PDF.</li>
             <li>Use the <strong>AI Assistant</strong> icon to chat with the NCERT AI Tutor.</li>
-            <li>Use the <strong>Download</strong> button in the Reader to save all chapters.</li>
           </ol>
         </div>
       )}
@@ -119,7 +135,7 @@ function LibraryContent() {
             {filteredBooks.length === 0 ? (
               <p style={{ color: '#999' }}>No books found for this class.</p>
             ) : (
-              filteredBooks.map(book => (
+              filteredBooks.map((book, index) => (
                 <Link to={`/reader/${encodeURIComponent(book.folder)}`} key={book.folder} style={{ textDecoration: 'none', color: 'inherit' }}>
                   <div style={{
                     background: 'white',
@@ -132,9 +148,45 @@ function LibraryContent() {
                   onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-5px)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.15)'; }}
                   onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,0.1)'; }}
                   >
-                    {/* Cover Area */}
-                    <div style={{ height: '200px', background: `linear-gradient(135deg, #8b0000, #b22222)`, display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
-                      <span style={{ fontSize: '60px' }}>📘</span>
+                    {/* 3D Book Cover */}
+                    <div style={{
+                      height: '200px',
+                      background: coverColors[index % coverColors.length],
+                      display: 'flex',
+                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      padding: '10px',
+                      position: 'relative',
+                      borderLeft: '8px solid rgba(0,0,0,0.3)' // Book spine
+                    }}>
+                      <div style={{ fontSize: '50px', marginBottom: '10px' }}>
+                        {subjectIcons[book.subject] || '📚'}
+                      </div>
+                      <div style={{
+                        fontSize: '14px',
+                        fontWeight: 'bold',
+                        color: 'white',
+                        textAlign: 'center',
+                        textShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                        lineHeight: '1.2'
+                      }}>
+                        {book.title}
+                      </div>
+                      <div style={{
+                        position: 'absolute',
+                        bottom: '10px',
+                        left: '10px',
+                        right: '10px',
+                        textAlign: 'center',
+                        background: 'rgba(0,0,0,0.3)',
+                        color: 'white',
+                        padding: '4px 8px',
+                        borderRadius: '12px',
+                        fontSize: '12px'
+                      }}>
+                        Class {book.class}
+                      </div>
                     </div>
                     
                     {/* Book Details */}
@@ -143,7 +195,7 @@ function LibraryContent() {
                         {book.title}
                       </p>
                       <p style={{ fontSize: '12px', color: '#888', margin: 0 }}>
-                        Class {book.class} | {book.chapters.length} Chapters
+                        {book.subject} | {book.chapters.length} Chapters
                       </p>
                     </div>
                   </div>
