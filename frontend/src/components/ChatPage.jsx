@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { FaPaperPlane, FaRobot, FaUser, FaTrash, FaDatabase, FaSearch, FaHistory, FaTimes, FaPlus } from 'react-icons/fa';
 
-const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+const API_BASE = 'https://ncert-rag-assistant-production-816c.up.railway.app';
 
 export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const [messages, setMessages] = useState([]);

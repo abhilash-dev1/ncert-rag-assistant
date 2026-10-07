@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { FaStickyNote, FaTrash, FaEdit } from 'react-icons/fa';
 
-const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+const API_BASE = 'https://ncert-rag-assistant-production-816c.up.railway.app';
 
 export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, bookTitle }) {
   const [notes, setNotes] = useState([]);

@@ -1,7 +1,7 @@
 // frontend/src/data/books.js
 export const books = [];
 
-const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+const API_BASE = 'https://ncert-rag-assistant-production-816c.up.railway.app';
 
 export async function loadBooks() {
   try {

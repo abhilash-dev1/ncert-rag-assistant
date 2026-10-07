@@ -12,7 +12,7 @@ import 'react-pdf/dist/Page/AnnotationLayer.css';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfjsWorker;
 
-const API_BASE = 'https://ncert-rag-assistant-production-ea73.up.railway.app';
+const API_BASE = 'https://ncert-rag-assistant-production-816c.up.railway.app';
 
 export default function ReaderPage() {
   const { bookId } = useParams();
