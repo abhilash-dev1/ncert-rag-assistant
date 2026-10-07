@@ -27,12 +27,31 @@ function LibraryContent() {
   const [user, setUser] = useState(null);
   const [loading, setLoading] = useState(true);
 
+  // ✅ Restore user from localStorage on mount
   useEffect(() => {
+    const saved = localStorage.getItem('user');
+    if (saved) {
+      try {
+        setUser(JSON.parse(saved));
+      } catch (e) {
+        localStorage.removeItem('user');
+      }
+    }
+  }, []);
+
+  // ✅ Only load books AFTER the user signs in
+  useEffect(() => {
+    if (!user) {
+      setBooks([]);
+      setLoading(false);
+      return;
+    }
+    setLoading(true);
     loadBooks().then(data => {
       setBooks(data);
       setLoading(false);
     });
-  }, []);
+  }, [user]);
 
   const classes = ['all', '6', '7', '8', '9', '10', '11', '12'];
 
@@ -54,6 +73,7 @@ function LibraryContent() {
   const handleLogout = () => {
     googleLogout();
     setUser(null);
+    setBooks([]);
     localStorage.removeItem('user');
   };
 
@@ -89,116 +109,126 @@ function LibraryContent() {
         )}
       </div>
 
-      {/* Class Filter */}
-      <div style={{
-        background: 'white',
-        borderRadius: '12px',
-        padding: '20px 30px',
-        margin: '30px 0',
-        boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
-        border: '1px solid #e0e0e0'
-      }}>
-        <h2 style={{ fontSize: '18px', color: '#333', marginBottom: '10px' }}>Choose Your Class</h2>
-        <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} style={{ padding: '12px 20px', borderRadius: '8px', border: '2px solid #8b0000', fontSize: '16px', fontFamily: "'Inter', sans-serif", background: '#fff', minWidth: '200px', cursor: 'pointer' }}>
-          {classes.map(cls => (
-            <option key={cls} value={cls}>{cls === 'all' ? 'All Classes' : `Class ${cls}`}</option>
-          ))}
-        </select>
-      </div>
-
-      {/* Instructions */}
-      {!user && (
-        <div style={{ background: '#fffbea', borderLeft: '6px solid #f0a500', padding: '20px 25px', borderRadius: '0 12px 12px 0', marginBottom: '40px' }}>
-          <h3 style={{ margin: '0 0 8px 0', color: '#f0a500' }}>📖 How to Use This Library</h3>
-          <ol style={{ margin: 0, paddingLeft: '20px', color: '#555', lineHeight: '1.8' }}>
-            <li>Sign in with your Google account to access the library.</li>
-            <li>Select your <strong>Class</strong> from the dropdown above.</li>
-            <li>Click on any <strong>Textbook</strong> to open the Reader.</li>
-            <li>In the Reader, click on any <strong>Chapter</strong> to open that chapter's PDF.</li>
-            <li>Use the <strong>AI Assistant</strong> icon to chat with the NCERT AI Tutor.</li>
-          </ol>
+      {/* ✅ If NOT signed in, show only the sign-in prompt */}
+      {!user ? (
+        <div style={{
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          minHeight: '60vh',
+          textAlign: 'center',
+          padding: '40px'
+        }}>
+          <div style={{ fontSize: '80px', marginBottom: '20px' }}>🔐</div>
+          <h2 style={{ fontSize: '26px', color: '#8b0000', marginBottom: '12px', fontFamily: "'Merriweather', serif" }}>
+            Sign In Required
+          </h2>
+          <p style={{ fontSize: '16px', color: '#555', maxWidth: '500px', lineHeight: '1.7', marginBottom: '30px', fontFamily: "'Inter', sans-serif" }}>
+            Please sign in with your Google account to access the NCERT Library, read textbooks, and chat with the AI Tutor.
+          </p>
+          <GoogleLogin onSuccess={handleSignInSuccess} onError={handleSignInError} size="large" shape="pill" theme="filled_blue" text="signin_with" />
         </div>
-      )}
-
-      {/* Book Grid */}
-      {loading ? (
-        <p style={{ color: '#888', fontSize: '18px' }}>Loading textbooks...</p>
       ) : (
         <>
-          <h2 style={{ fontSize: '22px', color: '#333', marginBottom: '20px' }}>
-            {selectedClass === 'all' ? 'All Textbooks' : `Class ${selectedClass} Textbooks`}
-          </h2>
-
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '30px' }}>
-            {filteredBooks.length === 0 ? (
-              <p style={{ color: '#999' }}>No books found for this class.</p>
-            ) : (
-              filteredBooks.map((book, index) => (
-                <Link to={`/reader/${encodeURIComponent(book.folder)}`} key={book.folder} style={{ textDecoration: 'none', color: 'inherit' }}>
-                  <div style={{
-                    background: 'white',
-                    borderRadius: '16px',
-                    overflow: 'hidden',
-                    boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
-                    transition: 'transform 0.2s, boxShadow 0.2s',
-                    border: '1px solid #e0e0e0'
-                  }}
-                  onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-5px)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.15)'; }}
-                  onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,0.1)'; }}
-                  >
-                    <div style={{
-                      height: '200px',
-                      background: coverColors[index % coverColors.length],
-                      display: 'flex',
-                      flexDirection: 'column',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      padding: '10px',
-                      position: 'relative',
-                      borderLeft: '8px solid rgba(0,0,0,0.3)'
-                    }}>
-                      <div style={{ fontSize: '50px', marginBottom: '10px' }}>
-                        {subjectIcons[book.subject] || '📚'}
-                      </div>
-                      <div style={{
-                        fontSize: '14px',
-                        fontWeight: 'bold',
-                        color: 'white',
-                        textAlign: 'center',
-                        textShadow: '0 2px 4px rgba(0,0,0,0.3)',
-                        lineHeight: '1.2'
-                      }}>
-                        {book.title}
-                      </div>
-                      <div style={{
-                        position: 'absolute',
-                        bottom: '10px',
-                        left: '10px',
-                        right: '10px',
-                        textAlign: 'center',
-                        background: 'rgba(0,0,0,0.3)',
-                        color: 'white',
-                        padding: '4px 8px',
-                        borderRadius: '12px',
-                        fontSize: '12px'
-                      }}>
-                        Class {book.class}
-                      </div>
-                    </div>
-                    
-                    <div style={{ padding: '12px 15px' }}>
-                      <p style={{ fontSize: '13px', fontWeight: 'bold', color: '#333', margin: '0 0 4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
-                        {book.title}
-                      </p>
-                      <p style={{ fontSize: '12px', color: '#888', margin: 0 }}>
-                        {book.subject} | {book.chapters.length} Chapters
-                      </p>
-                    </div>
-                  </div>
-                </Link>
-              ))
-            )}
+          {/* Class Filter */}
+          <div style={{
+            background: 'white',
+            borderRadius: '12px',
+            padding: '20px 30px',
+            margin: '30px 0',
+            boxShadow: '0 4px 20px rgba(0,0,0,0.05)',
+            border: '1px solid #e0e0e0'
+          }}>
+            <h2 style={{ fontSize: '18px', color: '#333', marginBottom: '10px' }}>Choose Your Class</h2>
+            <select value={selectedClass} onChange={(e) => setSelectedClass(e.target.value)} style={{ padding: '12px 20px', borderRadius: '8px', border: '2px solid #8b0000', fontSize: '16px', fontFamily: "'Inter', sans-serif", background: '#fff', minWidth: '200px', cursor: 'pointer' }}>
+              {classes.map(cls => (
+                <option key={cls} value={cls}>{cls === 'all' ? 'All Classes' : `Class ${cls}`}</option>
+              ))}
+            </select>
           </div>
+
+          {/* Book Grid */}
+          {loading ? (
+            <p style={{ color: '#888', fontSize: '18px' }}>Loading textbooks...</p>
+          ) : (
+            <>
+              <h2 style={{ fontSize: '22px', color: '#333', marginBottom: '20px' }}>
+                {selectedClass === 'all' ? 'All Textbooks' : `Class ${selectedClass} Textbooks`}
+              </h2>
+
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(180px, 1fr))', gap: '30px' }}>
+                {filteredBooks.length === 0 ? (
+                  <p style={{ color: '#999' }}>No books found for this class.</p>
+                ) : (
+                  filteredBooks.map((book, index) => (
+                    <Link to={`/reader/${encodeURIComponent(book.folder)}`} key={book.folder} style={{ textDecoration: 'none', color: 'inherit' }}>
+                      <div style={{
+                        background: 'white',
+                        borderRadius: '16px',
+                        overflow: 'hidden',
+                        boxShadow: '0 4px 15px rgba(0,0,0,0.1)',
+                        transition: 'transform 0.2s, boxShadow 0.2s',
+                        border: '1px solid #e0e0e0'
+                      }}
+                      onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-5px)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.15)'; }}
+                      onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,0.1)'; }}
+                      >
+                        <div style={{
+                          height: '200px',
+                          background: coverColors[index % coverColors.length],
+                          display: 'flex',
+                          flexDirection: 'column',
+                          alignItems: 'center',
+                          justifyContent: 'center',
+                          padding: '10px',
+                          position: 'relative',
+                          borderLeft: '8px solid rgba(0,0,0,0.3)'
+                        }}>
+                          <div style={{ fontSize: '50px', marginBottom: '10px' }}>
+                            {subjectIcons[book.subject] || '📚'}
+                          </div>
+                          <div style={{
+                            fontSize: '14px',
+                            fontWeight: 'bold',
+                            color: 'white',
+                            textAlign: 'center',
+                            textShadow: '0 2px 4px rgba(0,0,0,0.3)',
+                            lineHeight: '1.2'
+                          }}>
+                            {book.title}
+                          </div>
+                          <div style={{
+                            position: 'absolute',
+                            bottom: '10px',
+                            left: '10px',
+                            right: '10px',
+                            textAlign: 'center',
+                            background: 'rgba(0,0,0,0.3)',
+                            color: 'white',
+                            padding: '4px 8px',
+                            borderRadius: '12px',
+                            fontSize: '12px'
+                          }}>
+                            Class {book.class}
+                          </div>
+                        </div>
+                        
+                        <div style={{ padding: '12px 15px' }}>
+                          <p style={{ fontSize: '13px', fontWeight: 'bold', color: '#333', margin: '0 0 4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            {book.title}
+                          </p>
+                          <p style={{ fontSize: '12px', color: '#888', margin: 0 }}>
+                            {book.subject} | {book.chapters.length} Chapters
+                          </p>
+                        </div>
+                      </div>
+                    </Link>
+                  ))
+                )}
+              </div>
+            </>
+          )}
         </>
       )}
     </div>
