@@ -5,12 +5,15 @@ import { GoogleOAuthProvider, GoogleLogin, googleLogout } from '@react-oauth/goo
 import { jwtDecode } from 'jwt-decode';
 
 const GOOGLE_CLIENT_ID = "332298862506-s6cb3gnhvcbamvvb498hcji62ldto15n.apps.googleusercontent.com";
+const API_BASE = 'https://ncert-rag-assistant-production-816c.up.railway.app';
 
+// Beautiful color palette for book covers
 const coverColors = [
   '#2C3E50', '#E74C3C', '#3498DB', '#27AE60', '#8E44AD',
   '#D35400', '#16A085', '#C0392B', '#2980B9', '#F39C12'
 ];
 
+// Subject-based emojis
 const subjectIcons = {
   'History': '🏛️',
   'Geography': '🌍',
@@ -59,11 +62,38 @@ function LibraryContent() {
     ? books
     : books.filter(book => book.class === selectedClass || book.class === 'all');
 
-  const handleSignInSuccess = (credentialResponse) => {
+  // ✅ Register user in the backend database
+  const handleSignInSuccess = async (credentialResponse) => {
     const decoded = jwtDecode(credentialResponse.credential);
-    const userData = { name: decoded.name, email: decoded.email, picture: decoded.picture };
-    setUser(userData);
-    localStorage.setItem('user', JSON.stringify(userData));
+    const userData = {
+      email: decoded.email,
+      name: decoded.name,
+      picture: decoded.picture,
+      google_id: decoded.sub,
+    };
+
+    try {
+      const res = await fetch(`${API_BASE}/api/auth/google`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          email: userData.email,
+          name: userData.name,
+          google_id: userData.google_id,
+          profile_pic: userData.picture,
+        }),
+      });
+      const data = await res.json();
+      const fullUser = { ...userData, user_id: data.user_id };
+      setUser(fullUser);
+      localStorage.setItem('user', JSON.stringify(fullUser));
+      console.log('✅ User registered with ID:', data.user_id);
+    } catch (err) {
+      console.error('Sign-in backend error:', err);
+      const fullUser = { ...userData, user_id: 1 };
+      setUser(fullUser);
+      localStorage.setItem('user', JSON.stringify(fullUser));
+    }
   };
 
   const handleSignInError = () => {
@@ -109,7 +139,7 @@ function LibraryContent() {
         )}
       </div>
 
-      {/* ✅ If NOT signed in, show only the sign-in prompt */}
+      {/* ✅ If NOT signed in, show ONLY the sign-in prompt (no books visible) */}
       {!user ? (
         <div style={{
           display: 'flex',
@@ -128,6 +158,18 @@ function LibraryContent() {
             Please sign in with your Google account to access the NCERT Library, read textbooks, and chat with the AI Tutor.
           </p>
           <GoogleLogin onSuccess={handleSignInSuccess} onError={handleSignInError} size="large" shape="pill" theme="filled_blue" text="signin_with" />
+
+          {/* ✅ Your original "How to Use This Library" card, kept here */}
+          <div style={{ background: '#fffbea', borderLeft: '6px solid #f0a500', padding: '20px 25px', borderRadius: '0 12px 12px 0', marginTop: '50px', maxWidth: '560px', textAlign: 'left' }}>
+            <h3 style={{ margin: '0 0 8px 0', color: '#f0a500' }}>📖 How to Use This Library</h3>
+            <ol style={{ margin: 0, paddingLeft: '20px', color: '#555', lineHeight: '1.8' }}>
+              <li>Sign in with your Google account to access the library.</li>
+              <li>Select your <strong>Class</strong> from the dropdown above.</li>
+              <li>Click on any <strong>Textbook</strong> to open the Reader.</li>
+              <li>In the Reader, click on any <strong>Chapter</strong> to open that chapter's PDF.</li>
+              <li>Use the <strong>AI Assistant</strong> icon to chat with the NCERT AI Tutor.</li>
+            </ol>
+          </div>
         </div>
       ) : (
         <>
@@ -174,6 +216,7 @@ function LibraryContent() {
                       onMouseEnter={(e) => { e.currentTarget.style.transform = 'translateY(-5px)'; e.currentTarget.style.boxShadow = '0 8px 30px rgba(0,0,0,0.15)'; }}
                       onMouseLeave={(e) => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 4px 15px rgba(0,0,0,0.1)'; }}
                       >
+                        {/* 3D Book Cover */}
                         <div style={{
                           height: '200px',
                           background: coverColors[index % coverColors.length],
@@ -214,6 +257,7 @@ function LibraryContent() {
                           </div>
                         </div>
                         
+                        {/* Book Details */}
                         <div style={{ padding: '12px 15px' }}>
                           <p style={{ fontSize: '13px', fontWeight: 'bold', color: '#333', margin: '0 0 4px 0', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>
                             {book.title}

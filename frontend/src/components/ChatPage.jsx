@@ -17,6 +17,7 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const safeBookId = encodeURIComponent(bookId || '');
   const safeChapterId = encodeURIComponent(chapterId || '');
 
+  // ✅ Reset when chapter changes
   useEffect(() => {
     setMessages([]);
     setCurrentSessionId(null);
@@ -24,6 +25,7 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
     setShowHistory(false);
   }, [bookId, chapterId]);
 
+  // ✅ Load history filtered by book + chapter + user
   useEffect(() => {
     if (!bookId || !chapterId) return;
     fetch(`${API_BASE}/api/chat/history/${userId}?book_id=${safeBookId}&chapter_id=${safeChapterId}`)
@@ -66,7 +68,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
           question: input,
           book_id: bookId || null,
           chapter_id: chapterId || null,
-          session_id: currentSessionId
+          session_id: currentSessionId,
+          user_id: userId,   // ✅ Send real user_id
         }),
       });
 
@@ -76,8 +79,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
         setCurrentSessionId(data.session_id);
       }
 
-      const answerText = data.answer && data.answer.trim() 
-        ? data.answer 
+      const answerText = data.answer && data.answer.trim()
+        ? data.answer
         : '⚠️ Could not find a clear answer. Please try rephrasing.';
 
       const aiMsg = {
@@ -101,6 +104,7 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
   const handleKeyPress = (e) => e.key === 'Enter' && sendMessage();
   const clearChat = () => { setMessages([]); setCurrentSessionId(null); setMessageCount(0); };
 
+  // ✅ Load a full session from history
   const loadChatFromHistory = (sessionId) => {
     fetch(`${API_BASE}/api/chat/${sessionId}`)
       .then(res => res.json())
@@ -217,13 +221,13 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
       {/* Input */}
       <div style={{ padding: '10px', background: 'white', borderTop: '1px solid #e0e0e0' }}>
         <div style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-          <input 
-            type="text" 
-            value={input} 
-            onChange={(e) => setInput(e.target.value)} 
-            onKeyPress={handleKeyPress} 
-            placeholder={`Ask about ${chapterId}...`} 
-            style={{ flex: 1, padding: '10px 14px', borderRadius: '20px', border: '1px solid #ddd', fontSize: '13px', outline: 'none', background: '#f9f9f9' }} 
+          <input
+            type="text"
+            value={input}
+            onChange={(e) => setInput(e.target.value)}
+            onKeyPress={handleKeyPress}
+            placeholder={`Ask about ${chapterId}...`}
+            style={{ flex: 1, padding: '10px 14px', borderRadius: '20px', border: '1px solid #ddd', fontSize: '13px', outline: 'none', background: '#f9f9f9' }}
           />
           <button onClick={sendMessage} style={{ background: 'linear-gradient(135deg, #8b0000, #b22222)', color: 'white', border: 'none', borderRadius: '50%', width: '38px', height: '38px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center' }}>
             <FaPaperPlane size={14} />
@@ -250,8 +254,8 @@ export default function ChatPage({ bookId, chapterId, userId = 1 }) {
               <p style={{ textAlign: 'center', color: '#999', marginTop: '50px' }}>No chat sessions for this chapter yet.</p>
             ) : (
               history.map((session, idx) => (
-                <div 
-                  key={idx} 
+                <div
+                  key={idx}
                   onClick={() => loadChatFromHistory(session.session_id)}
                   style={{
                     marginBottom: '12px',

@@ -29,7 +29,6 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# ✅ Hugging Face Dataset Configuration
 HF_USERNAME = "abhilash-pokuri123"
 HF_DATASET = "ncert-pdfs"
 HF_BASE_URL = f"https://huggingface.co/datasets/{HF_USERNAME}/{HF_DATASET}/resolve/main"
@@ -50,6 +49,7 @@ class SearchRequest(BaseModel):
     book_id: Optional[str] = None
     chapter_id: Optional[str] = None
     session_id: Optional[int] = None
+    user_id: Optional[int] = 1   # ✅ NEW
 
 class SearchResponse(BaseModel):
     answer: str
@@ -69,12 +69,14 @@ class NoteCreate(BaseModel):
     chapter_id: Optional[str] = None
     page_number: int
     content: str
+    user_id: Optional[int] = 1   # ✅ NEW
 
 class ProgressCreate(BaseModel):
     book_id: str
     last_page: int
+    user_id: Optional[int] = 1   # ✅ NEW
 
-# --- TEXTBOOKS & CHAPTERS (from Hugging Face) ---
+# --- TEXTBOOKS & CHAPTERS ---
 @app.get("/api/textbooks")
 async def get_textbooks():
     try:
@@ -91,11 +93,7 @@ async def get_textbooks():
                     ch_resp = await http_client.get(chapters_url)
                     if ch_resp.status_code == 200:
                         ch_items = ch_resp.json()
-                        pdfs = [
-                            f["path"].split("/")[-1]
-                            for f in ch_items
-                            if f["type"] == "file" and f["path"].lower().endswith(".pdf")
-                        ]
+                        pdfs = [f["path"].split("/")[-1] for f in ch_items if f["type"] == "file" and f["path"].lower().endswith(".pdf")]
                         pdfs.sort(key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
                         if pdfs:
                             textbooks.append({"folder": folder_name, "chapters": pdfs})
@@ -114,19 +112,14 @@ async def get_chapters(folder_name: str):
             response = await http_client.get(chapters_url)
             response.raise_for_status()
             items = response.json()
-
-        pdfs = [
-            f["path"].split("/")[-1]
-            for f in items
-            if f["type"] == "file" and f["path"].lower().endswith(".pdf")
-        ]
+        pdfs = [f["path"].split("/")[-1] for f in items if f["type"] == "file" and f["path"].lower().endswith(".pdf")]
         pdfs.sort(key=lambda x: int(''.join(filter(str.isdigit, x)) or 0))
         return {"chapters": pdfs}
     except Exception as e:
         print(f"⚠️ Error fetching chapters: {e}")
         return {"chapters": []}
 
-# ✅ Proxy PDF requests to Hugging Face
+# ✅ PDF Proxy
 @app.get("/api/pdf/{folder_name}/{chapter_name}")
 async def serve_pdf(folder_name: str, chapter_name: str):
     pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
@@ -135,18 +128,10 @@ async def serve_pdf(folder_name: str, chapter_name: str):
         async with httpx.AsyncClient(timeout=180, follow_redirects=True) as http_client:
             response = await http_client.get(pdf_url)
             if response.status_code != 200:
-                print(f"⚠️ HF returned {response.status_code}")
-                raise HTTPException(status_code=response.status_code, detail="PDF not found on Hugging Face")
-            
+                raise HTTPException(status_code=response.status_code, detail="PDF not found")
             print(f"✅ Served PDF: {chapter_name} ({len(response.content)} bytes)")
-            return Response(
-                content=response.content,
-                media_type="application/pdf",
-                headers={
-                    "Content-Disposition": f"inline; filename={chapter_name}",
-                    "Access-Control-Allow-Origin": "*"
-                }
-            )
+            return Response(content=response.content, media_type="application/pdf",
+                headers={"Content-Disposition": f"inline; filename={chapter_name}", "Access-Control-Allow-Origin": "*"})
     except HTTPException:
         raise
     except Exception as e:
@@ -158,11 +143,13 @@ async def serve_pdf(folder_name: str, chapter_name: str):
 async def google_auth(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.google_id == user.google_id).first()
     if existing:
+        print(f"👤 Existing user logged in: {user.email} (ID: {existing.id})")
         return {"message": "User already exists", "user_id": existing.id}
     new_user = User(email=user.email, name=user.name, google_id=user.google_id, profile_pic=user.profile_pic)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
+    print(f"✨ New user created: {user.email} (ID: {new_user.id})")
     return {"message": "User created", "user_id": new_user.id}
 
 @app.get("/api/auth/me/{user_id}")
@@ -209,9 +196,8 @@ async def get_chat_history(user_id: int, book_id: str = None, chapter_id: str = 
 
 @app.post("/chat", response_model=SearchResponse)
 async def chat(request: SearchRequest, db: Session = Depends(get_db)):
-    print(f"\n📥 Received: {request.question} | Book: {request.book_id} | Chapter: {request.chapter_id} | Session: {request.session_id}")
+    print(f"\n📥 Received: {request.question} | User: {request.user_id} | Book: {request.book_id} | Chapter: {request.chapter_id}")
 
-    # ✅ Broader trigger detection for summary/broad questions
     is_summary_request = any(word in request.question.lower() for word in
         ["explain", "summary", "summarize", "what is this chapter", "about", "full concept",
          "teach me", "what concepts", "what are the", "what topics", "overview",
@@ -224,31 +210,21 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     try:
         if is_summary_request and request.book_id and request.chapter_id:
-            print("📖 Summary request detected. Fetching all chunks for this chapter...")
+            print("📖 Summary request detected. Fetching all chunks...")
             qclient = get_qdrant_client()
             from qdrant_client.models import Filter, FieldCondition, MatchValue
-
-            query_filter = Filter(
-                must=[
-                    FieldCondition(key="book_id", match=MatchValue(value=request.book_id)),
-                    FieldCondition(key="chapter_id", match=MatchValue(value=request.chapter_id))
-                ]
-            )
-
-            results = qclient.scroll(
-                collection_name="ncert_search",
-                scroll_filter=query_filter,
-                limit=2000
-            )
+            query_filter = Filter(must=[
+                FieldCondition(key="book_id", match=MatchValue(value=request.book_id)),
+                FieldCondition(key="chapter_id", match=MatchValue(value=request.chapter_id))
+            ])
+            results = qclient.scroll(collection_name="ncert_search", scroll_filter=query_filter, limit=2000)
             points = results[0]
-
             if points:
                 chunks = [p.payload["text"] for p in points]
                 metadata = [{"book_id": p.payload["book_id"], "chapter_id": p.payload["chapter_id"], "page": p.payload["page"]} for p in points]
                 scores = [0.9] * len(chunks)
-                print(f"📚 Loaded {len(chunks)} chunks from chapter {request.chapter_id}")
+                print(f"📚 Loaded {len(chunks)} chunks")
             else:
-                print("⚠️ No chunks found in summary mode. Falling back to standard search...")
                 chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
         else:
             chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
@@ -266,7 +242,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
                 paired = sorted(zip(chunks, metadata), key=lambda x: x[1].get('page', 0))
                 chunks = [p[0] for p in paired]
                 metadata = [p[1] for p in paired]
-
             final_answer = clean_with_llm(chunks, request.question, is_summary_request)
             source_list = list(set([f"Book: {m.get('book_id', 'Unknown')}, Page: {m.get('page', '?')}" for m in metadata]))
         except Exception as e:
@@ -283,7 +258,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     if not session:
         session = ChatSession(
-            user_id=1,
+            user_id=request.user_id or 1,   # ✅ Real user_id
             book_id=request.book_id,
             chapter_id=request.chapter_id,
             title=request.question[:30] + '...'
@@ -291,29 +266,22 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
         db.add(session)
         db.commit()
         db.refresh(session)
-        print(f"✨ Created new session: {session.id}")
+        print(f"✨ Created new session: {session.id} for user {session.user_id}")
 
     try:
         db.add(ChatMessage(chat_session_id=session.id, sender='user', text=request.question))
         db.add(ChatMessage(chat_session_id=session.id, sender='ai', text=final_answer, sources=json.dumps(source_list)))
         db.commit()
-        print(f"✅ Saved messages to session: {session.id}")
     except Exception as e:
         print(f"⚠️ DB Error: {e}")
 
-    return SearchResponse(
-        answer=final_answer,
-        sources=source_list,
-        chunks=chunks[:5],
-        scores=scores[:5],
-        session_id=session.id
-    )
+    return SearchResponse(answer=final_answer, sources=source_list, chunks=chunks[:5], scores=scores[:5], session_id=session.id)
 
 # --- NOTES APIs ---
 @app.post("/api/notes")
 async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
     new_note = Note(
-        user_id=1,
+        user_id=note.user_id or 1,   # ✅ Real user_id
         book_id=note.book_id,
         chapter_id=note.chapter_id,
         page_number=note.page_number,
@@ -344,12 +312,13 @@ async def delete_note(note_id: int, db: Session = Depends(get_db)):
 # --- PROGRESS APIs ---
 @app.post("/api/progress")
 async def save_progress(progress: ProgressCreate, db: Session = Depends(get_db)):
-    existing = db.query(BookAccess).filter(BookAccess.user_id == 1, BookAccess.book_id == progress.book_id).first()
+    uid = progress.user_id or 1
+    existing = db.query(BookAccess).filter(BookAccess.user_id == uid, BookAccess.book_id == progress.book_id).first()
     if existing:
         existing.last_page = progress.last_page
         existing.last_opened = datetime.utcnow()
     else:
-        db.add(BookAccess(user_id=1, book_id=progress.book_id, last_page=progress.last_page))
+        db.add(BookAccess(user_id=uid, book_id=progress.book_id, last_page=progress.last_page))
     db.commit()
     return {"message": "Progress saved"}
 

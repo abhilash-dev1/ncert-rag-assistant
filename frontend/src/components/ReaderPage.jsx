@@ -27,9 +27,18 @@ export default function ReaderPage() {
   const [scale, setScale] = useState(2.0);
   const [isPanelVisible, setIsPanelVisible] = useState(false);
 
+  // ✅ Get logged-in user's ID
+  const user = JSON.parse(localStorage.getItem('user') || '{}');
+  const userId = user.user_id || 1;
+
   const folderName = decodeURIComponent(bookId);
 
   useEffect(() => {
+    // ✅ Redirect to library if not signed in
+    if (!user.user_id && !user.email) {
+      navigate('/library');
+      return;
+    }
     loadBooks().then(allBooks => {
       const foundBook = allBooks.find(b => b.folder === folderName);
       setBook(foundBook);
@@ -39,6 +48,20 @@ export default function ReaderPage() {
       }
     });
   }, [folderName]);
+
+  // ✅ Auto-save reading progress (page number) to backend
+  useEffect(() => {
+    if (!currentChapter || !pageNumber || !book) return;
+    fetch(`${API_BASE}/api/progress`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        book_id: book.folder,
+        last_page: pageNumber,
+        user_id: userId,
+      }),
+    }).catch(() => {});
+  }, [pageNumber, currentChapter, book, userId]);
 
   const onDocumentLoadSuccess = ({ numPages }) => setNumPages(numPages);
 
@@ -156,10 +179,10 @@ export default function ReaderPage() {
 
             <div style={{ flex: 1, overflow: 'hidden', position: 'relative' }}>
               <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: activePanel === 'chat' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <ChatPage bookId={folderName} chapterId={currentChapter} />
+                <ChatPage bookId={folderName} chapterId={currentChapter} userId={userId} />
               </div>
               <div style={{ position: 'absolute', top: 0, left: 0, right: 0, bottom: 0, display: activePanel === 'notes' ? 'flex' : 'none', flexDirection: 'column' }}>
-                <NotesPanel bookId={folderName} chapterId={currentChapter} pageNumber={pageNumber} bookTitle={book.title} />
+                <NotesPanel bookId={folderName} chapterId={currentChapter} pageNumber={pageNumber} bookTitle={book.title} userId={userId} />
               </div>
             </div>
           </div>

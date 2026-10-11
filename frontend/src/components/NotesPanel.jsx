@@ -11,6 +11,7 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
   const safeBookId = encodeURIComponent(bookId || '');
   const safeChapterId = encodeURIComponent(chapterId || '');
 
+  // ✅ Reload notes when chapter or user changes
   useEffect(() => {
     if (!bookId || !chapterId) return;
     fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
@@ -28,7 +29,8 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
         book_id: bookId,
         chapter_id: chapterId,
         page_number: pageNumber,
-        content: noteInput
+        content: noteInput,
+        user_id: userId,   // ✅ Real user_id
       })
     })
     .then(res => res.json())
@@ -55,7 +57,13 @@ export default function NotesPanel({ bookId, chapterId, pageNumber, userId = 1, 
     fetch(`${API_BASE}/api/notes`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ book_id: bookId, chapter_id: chapterId, page_number: pageNumber, content: noteInput })
+      body: JSON.stringify({
+        book_id: bookId,
+        chapter_id: chapterId,
+        page_number: pageNumber,
+        content: noteInput,
+        user_id: userId,   // ✅ Real user_id
+      })
     }).then(() => {
       fetch(`${API_BASE}/api/notes/${safeBookId}/${userId}?chapter_id=${safeChapterId}`)
         .then(res => res.json())
