@@ -49,7 +49,7 @@ class SearchRequest(BaseModel):
     book_id: Optional[str] = None
     chapter_id: Optional[str] = None
     session_id: Optional[int] = None
-    user_id: Optional[int] = 1   # ✅ NEW
+    user_id: Optional[int] = 1
 
 class SearchResponse(BaseModel):
     answer: str
@@ -69,12 +69,32 @@ class NoteCreate(BaseModel):
     chapter_id: Optional[str] = None
     page_number: int
     content: str
-    user_id: Optional[int] = 1   # ✅ NEW
+    user_id: Optional[int] = 1
 
 class ProgressCreate(BaseModel):
     book_id: str
     last_page: int
-    user_id: Optional[int] = 1   # ✅ NEW
+    user_id: Optional[int] = 1
+
+# ✅ Reverse-text detector & fixer (for mirrored PDF pages)
+def is_reversed(text):
+    sample = ' ' + text.lower() + ' '
+    rev_markers = [' eht ', ' dna ', ' fo ', ' ot ', ' ni ', ' si ', ' ta ', ' rof ']
+    norm_markers = [' the ', ' and ', ' of ', ' to ', ' in ', ' is ', ' at ', ' for ']
+    rev_count = sum(1 for m in rev_markers if m in sample)
+    norm_count = sum(1 for m in norm_markers if m in sample)
+    return rev_count >= 2 and rev_count > norm_count
+
+def fix_reversed_chunks(chunks):
+    """Fix any chunks that came back reversed from Qdrant"""
+    fixed = []
+    for c in chunks:
+        if is_reversed(c):
+            fixed.append(c[::-1])
+            print(f"🔄 Reversed a chunk: {c[:40]}... → {c[::-1][:40]}...")
+        else:
+            fixed.append(c)
+    return fixed
 
 # --- TEXTBOOKS & CHAPTERS ---
 @app.get("/api/textbooks")
@@ -201,7 +221,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
     is_summary_request = any(word in request.question.lower() for word in
         ["explain", "summary", "summarize", "what is this chapter", "about", "full concept",
          "teach me", "what concepts", "what are the", "what topics", "overview",
-         "introduction", "describe", "why should i learn", "why learn"]
+         "introduction", "describe", "why should i learn", "why learn", "what is", "how to"]
     )
 
     chunks = []
@@ -210,7 +230,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     try:
         if is_summary_request and request.book_id and request.chapter_id:
-            print("📖 Summary request detected. Fetching all chunks...")
+            print("📖 Summary request detected. Fetching chapter chunks from Qdrant...")
             qclient = get_qdrant_client()
             from qdrant_client.models import Filter, FieldCondition, MatchValue
             query_filter = Filter(must=[
@@ -223,7 +243,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
                 chunks = [p.payload["text"] for p in points]
                 metadata = [{"book_id": p.payload["book_id"], "chapter_id": p.payload["chapter_id"], "page": p.payload["page"]} for p in points]
                 scores = [0.9] * len(chunks)
-                print(f"📚 Loaded {len(chunks)} chunks")
+                print(f"📚 Loaded {len(chunks)} chunks from chapter")
             else:
                 chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
         else:
@@ -232,6 +252,10 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
         chunks, metadata, scores = [], [], []
+
+    # ✅ Fix reversed chunks (from mirrored PDF pages)
+    if chunks:
+        chunks = fix_reversed_chunks(chunks)
 
     final_answer = ""
     source_list = []
@@ -258,7 +282,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     if not session:
         session = ChatSession(
-            user_id=request.user_id or 1,   # ✅ Real user_id
+            user_id=request.user_id or 1,
             book_id=request.book_id,
             chapter_id=request.chapter_id,
             title=request.question[:30] + '...'
@@ -281,7 +305,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 @app.post("/api/notes")
 async def create_note(note: NoteCreate, db: Session = Depends(get_db)):
     new_note = Note(
-        user_id=note.user_id or 1,   # ✅ Real user_id
+        user_id=note.user_id or 1,
         book_id=note.book_id,
         chapter_id=note.chapter_id,
         page_number=note.page_number,
