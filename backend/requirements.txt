@@ -10,4 +10,4 @@ langchain-text-splitters
 fastembed
 qdrant-client
 httpx
-psycopg2-binary
+psycopg[binary]
