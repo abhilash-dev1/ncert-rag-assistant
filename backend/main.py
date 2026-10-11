@@ -16,7 +16,7 @@ from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
 from rag_search import build_index, search_similar, get_qdrant_client
-from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
+from database import get_db, init_db, User, ChatSession, ChatMessage, Note
 from google import genai
 import sqlite3
 import html as html_escape
@@ -73,12 +73,7 @@ class NoteCreate(BaseModel):
     content: str
     user_id: Optional[int] = 1
 
-class ProgressCreate(BaseModel):
-    book_id: str
-    last_page: int
-    user_id: Optional[int] = 1
-
-# ✅ Reverse-text detector & fixer (for mirrored PDF pages)
+# ✅ Reverse-text detector
 def is_reversed(text):
     sample = ' ' + text.lower() + ' '
     rev_markers = [' eht ', ' dna ', ' fo ', ' ot ', ' ni ', ' si ', ' ta ', ' rof ']
@@ -92,7 +87,7 @@ def fix_reversed_chunks(chunks):
     for c in chunks:
         if is_reversed(c):
             fixed.append(c[::-1])
-            print(f"🔄 Reversed a chunk: {c[:40]}...")
+            print(f"🔄 Reversed a chunk")
         else:
             fixed.append(c)
     return fixed
@@ -119,7 +114,7 @@ async def get_textbooks():
                         if pdfs:
                             textbooks.append({"folder": folder_name, "chapters": pdfs})
 
-            print(f"📚 Loaded {len(textbooks)} textbooks from Hugging Face")
+            print(f"📚 Loaded {len(textbooks)} textbooks")
             return {"textbooks": textbooks}
     except Exception as e:
         print(f"⚠️ Error fetching textbooks: {e}")
@@ -143,13 +138,11 @@ async def get_chapters(folder_name: str):
 @app.get("/api/pdf/{folder_name}/{chapter_name}")
 async def serve_pdf(folder_name: str, chapter_name: str):
     pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
-    print(f"📄 Fetching PDF: {pdf_url}")
     try:
         async with httpx.AsyncClient(timeout=180, follow_redirects=True) as http_client:
             response = await http_client.get(pdf_url)
             if response.status_code != 200:
                 raise HTTPException(status_code=response.status_code, detail="PDF not found")
-            print(f"✅ Served PDF: {chapter_name} ({len(response.content)} bytes)")
             return Response(content=response.content, media_type="application/pdf",
                 headers={"Content-Disposition": f"inline; filename={chapter_name}", "Access-Control-Allow-Origin": "*"})
     except HTTPException:
@@ -163,13 +156,13 @@ async def serve_pdf(folder_name: str, chapter_name: str):
 async def google_auth(user: UserCreate, db: Session = Depends(get_db)):
     existing = db.query(User).filter(User.google_id == user.google_id).first()
     if existing:
-        print(f"👤 Existing user logged in: {user.email} (ID: {existing.id})")
+        print(f"👤 Existing user: {user.email} (ID: {existing.id})")
         return {"message": "User already exists", "user_id": existing.id}
     new_user = User(email=user.email, name=user.name, google_id=user.google_id, profile_pic=user.profile_pic)
     db.add(new_user)
     db.commit()
     db.refresh(new_user)
-    print(f"✨ New user created: {user.email} (ID: {new_user.id})")
+    print(f"✨ New user: {user.email} (ID: {new_user.id})")
     return {"message": "User created", "user_id": new_user.id}
 
 @app.get("/api/auth/me/{user_id}")
@@ -216,7 +209,7 @@ async def get_chat_history(user_id: int, book_id: str = None, chapter_id: str = 
 
 @app.post("/chat", response_model=SearchResponse)
 async def chat(request: SearchRequest, db: Session = Depends(get_db)):
-    print(f"\n📥 Received: {request.question} | User: {request.user_id} | Book: {request.book_id} | Chapter: {request.chapter_id}")
+    print(f"\n📥 {request.question} | User: {request.user_id}")
 
     is_summary_request = any(word in request.question.lower() for word in
         ["explain", "summary", "summarize", "what is this chapter", "about", "full concept",
@@ -230,7 +223,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
 
     try:
         if is_summary_request and request.book_id and request.chapter_id:
-            print("📖 Summary request detected. Fetching chapter chunks from Qdrant...")
             qclient = get_qdrant_client()
             from qdrant_client.models import Filter, FieldCondition, MatchValue
             query_filter = Filter(must=[
@@ -243,12 +235,10 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
                 chunks = [p.payload["text"] for p in points]
                 metadata = [{"book_id": p.payload["book_id"], "chapter_id": p.payload["chapter_id"], "page": p.payload["page"]} for p in points]
                 scores = [0.9] * len(chunks)
-                print(f"📚 Loaded {len(chunks)} chunks from chapter")
             else:
                 chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
         else:
             chunks, metadata, scores = search_similar(query=request.question, book_id=request.book_id, top_k=8)
-            print(f"📚 RAG found {len(chunks)} chunks")
     except Exception as e:
         print(f"⚠️ Search Error: {e}")
         chunks, metadata, scores = [], [], []
@@ -272,7 +262,7 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
             final_answer = ""
 
     if not final_answer or len(final_answer.strip()) < 10:
-        final_answer = "I searched the textbook, but I couldn't find a clear answer. Please try asking a more specific question about the chapter."
+        final_answer = "I searched the textbook, but I couldn't find a clear answer. Please try asking a more specific question."
         source_list = []
 
     session = None
@@ -289,7 +279,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
         db.add(session)
         db.commit()
         db.refresh(session)
-        print(f"✨ Created new session: {session.id} for user {session.user_id}")
 
     try:
         db.add(ChatMessage(chat_session_id=session.id, sender='user', text=request.question))
@@ -332,26 +321,6 @@ async def delete_note(note_id: int, db: Session = Depends(get_db)):
     db.commit()
     return {"message": "Note deleted"}
 
-# --- PROGRESS APIs ---
-@app.post("/api/progress")
-async def save_progress(progress: ProgressCreate, db: Session = Depends(get_db)):
-    uid = progress.user_id or 1
-    existing = db.query(BookAccess).filter(BookAccess.user_id == uid, BookAccess.book_id == progress.book_id).first()
-    if existing:
-        existing.last_page = progress.last_page
-        existing.last_opened = datetime.utcnow()
-    else:
-        db.add(BookAccess(user_id=uid, book_id=progress.book_id, last_page=progress.last_page))
-    db.commit()
-    return {"message": "Progress saved"}
-
-@app.get("/api/progress/{book_id}/{user_id}")
-async def get_progress(book_id: str, user_id: int, db: Session = Depends(get_db)):
-    progress = db.query(BookAccess).filter(BookAccess.book_id == book_id, BookAccess.user_id == user_id).first()
-    if progress:
-        return {"last_page": progress.last_page}
-    return {"last_page": 1}
-
 # --- CLEAN AI FUNCTION ---
 def clean_with_llm(chunks, question, is_summary=False):
     rag_context = "\n\n---\n\n".join(chunks)
@@ -361,16 +330,14 @@ def clean_with_llm(chunks, question, is_summary=False):
 
 Student's Question: {question}
 
-FULL CHAPTER CONTEXT (from the actual textbook):
+FULL CHAPTER CONTEXT:
 {rag_context}
 
 INSTRUCTIONS:
-- Give a COMPREHENSIVE and DETAILED answer (at least 3-5 paragraphs or a structured explanation).
+- Give a COMPREHENSIVE answer (at least 3-5 paragraphs).
 - Use ONLY information from the context above.
-- Explain concepts clearly with examples from the text.
 - Use simple language for a school student.
-- Do NOT mention page numbers, "Contents", or metadata.
-- Structure your answer with clear headings or bullet points if helpful.
+- Structure with clear headings or bullet points.
 
 Answer:"""
     else:
@@ -382,12 +349,9 @@ TEXTBOOK CONTEXT (Use ONLY this to answer):
 {rag_context}
 
 INSTRUCTIONS:
-- Give a DETAILED and COMPREHENSIVE answer (at least 2-3 paragraphs).
-- Explain your answer using evidence from the textbook context.
-- Do NOT give one-line answers. Provide reasoning and examples.
-- Use simple language for a school student.
-- IGNORE page numbers, "Contents", "Foreword", "Preface".
-- If the answer truly cannot be found, say "I could not find the specific answer in this chapter's text."
+- Give a DETAILED answer (at least 2-3 paragraphs).
+- Use evidence from the textbook context.
+- If the answer cannot be found, say "I could not find the specific answer in this chapter's text."
 
 Answer:"""
     models_to_try = ["gemini-2.5-flash", "gemini-2.0-flash-lite", "gemini-2.5-pro", "gemini-2.0-flash"]
@@ -395,10 +359,9 @@ Answer:"""
         try:
             response = client.models.generate_content(model=model_name, contents=prompt)
             if response.text and len(response.text.strip()) > 10:
-                print(f"✅ Model '{model_name}' worked!")
                 return response.text
         except Exception as e:
-            print(f"⚠️ Model '{model_name}' failed: {e}")
+            print(f"⚠️ {model_name} failed: {e}")
             continue
     return ""
 
@@ -406,37 +369,31 @@ Answer:"""
 async def root():
     return {"status": "running", "message": "NCERT RAG Gemini Tutor is online!"}
 
-# --- ADMIN DB VIEWER ---
+# --- ADMIN DB VIEWER (no book_access) ---
 @app.get("/admin/db", response_class=HTMLResponse)
 async def admin_db_view():
     db_path = "/tmp/ncert_rag.db"
     if not os.path.exists(db_path):
-        return HTMLResponse("""<body style='font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0'>
-        <h1>⚠️ No database yet</h1>
-        <p>Sign in to your app first, then refresh this page.</p>
-        <p style='color:#64748b;font-size:14px'>Looking for: /tmp/ncert_rag.db</p>
-        </body>""")
+        return HTMLResponse("<body style='font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0'><h1>⚠️ No database yet. Sign in first.</h1></body>")
 
-    tables = ["users", "chat_sessions", "chat_messages", "notes", "book_access"]
+    tables = ["users", "chat_sessions", "chat_messages", "notes"]
     html_parts = ["""<!DOCTYPE html>
     <html><head><title>NCERT RAG DB Viewer</title>
     <style>
-        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; margin: 0; }
+        body { font-family: -apple-system, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; margin: 0; }
         h1 { color: #f87171; margin-bottom: 8px; }
         .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
         h2 { color: #60a5fa; margin-top: 32px; border-bottom: 2px solid #334155; padding-bottom: 8px; font-size: 18px; }
         table { border-collapse: collapse; width: 100%; margin-top: 12px; background: #1e293b; font-size: 13px; }
         th, td { border: 1px solid #334155; padding: 8px 12px; text-align: left; vertical-align: top; max-width: 400px; overflow-wrap: break-word; }
-        th { background: #1e40af; color: white; font-weight: 600; position: sticky; top: 0; }
+        th { background: #1e40af; color: white; }
         tr:nth-child(even) { background: #0f172a; }
-        tr:hover { background: #1e40af22; }
         .empty { color: #64748b; font-style: italic; padding: 12px; background: #1e293b; border-radius: 6px; }
         .count { color: #94a3b8; font-size: 13px; font-weight: normal; }
-        .refresh { display: inline-block; background: #3b82f6; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; margin-top: 12px; font-size: 14px; }
-        .refresh:hover { background: #2563eb; }
+        .refresh { display: inline-block; background: #3b82f6; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; font-size: 14px; }
     </style></head><body>
     <h1>📊 NCERT RAG Database Viewer</h1>
-    <p class="subtitle">Live view of <code>/tmp/ncert_rag.db</code> on Railway · <a href="/admin/db" class="refresh">🔄 Refresh</a></p>
+    <p class="subtitle">Live view of /tmp/ncert_rag.db · <a href="/admin/db" class="refresh">🔄 Refresh</a></p>
     """]
 
     try:

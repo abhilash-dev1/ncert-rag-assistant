@@ -27,14 +27,12 @@ export default function ReaderPage() {
   const [scale, setScale] = useState(2.0);
   const [isPanelVisible, setIsPanelVisible] = useState(false);
 
-  // ✅ Get logged-in user's ID
   const user = JSON.parse(localStorage.getItem('user') || '{}');
   const userId = user.user_id || 1;
 
   const folderName = decodeURIComponent(bookId);
 
   useEffect(() => {
-    // ✅ Redirect to library if not signed in
     if (!user.user_id && !user.email) {
       navigate('/library');
       return;
@@ -48,20 +46,6 @@ export default function ReaderPage() {
       }
     });
   }, [folderName]);
-
-  // ✅ Auto-save reading progress (page number) to backend
-  useEffect(() => {
-    if (!currentChapter || !pageNumber || !book) return;
-    fetch(`${API_BASE}/api/progress`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        book_id: book.folder,
-        last_page: pageNumber,
-        user_id: userId,
-      }),
-    }).catch(() => {});
-  }, [pageNumber, currentChapter, book, userId]);
 
   const onDocumentLoadSuccess = ({ numPages }) => setNumPages(numPages);
 
@@ -90,10 +74,8 @@ export default function ReaderPage() {
   return (
     <div style={{ display: 'flex', height: '100vh', width: '100vw', fontFamily: "'Merriweather', serif", background: '#faf9f6', overflow: 'hidden' }}>
 
-      {/* LEFT SIDE */}
       <div style={{ flex: isFullScreen ? 1 : 4, display: 'flex', flexDirection: 'column', background: '#e8e8e8', padding: '20px', overflow: 'hidden', position: 'relative' }}>
 
-        {/* Top Bar */}
         <div style={{ position: 'absolute', top: '10px', left: '20px', right: '20px', zIndex: 10, display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
           <button onClick={() => navigate('/library')} style={{ background: '#8b0000', color: 'white', border: 'none', borderRadius: '20px', padding: '8px 15px', fontSize: '14px', cursor: 'pointer', display: 'flex', alignItems: 'center', gap: '6px' }}>
             <FaArrowLeft /> Back to Library
@@ -118,10 +100,8 @@ export default function ReaderPage() {
           </div>
         </div>
 
-        {/* Content Area */}
         <div style={{ marginTop: '60px', flex: 1, position: 'relative', overflow: 'hidden' }}>
 
-          {/* PDF VIEWER */}
           <div style={{
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
             display: 'flex', flexDirection: 'column', alignItems: 'center', overflow: 'hidden',
@@ -155,7 +135,6 @@ export default function ReaderPage() {
             )}
           </div>
 
-          {/* PANEL */}
           <div style={{
             position: 'absolute', top: 0, left: 0, right: 0, bottom: 0,
             background: 'white',
@@ -190,7 +169,6 @@ export default function ReaderPage() {
         </div>
       </div>
 
-      {/* RIGHT SIDE - Chapter List */}
       {!isFullScreen && (
         <div style={{ flex: 1, background: '#8b0000', color: 'white', display: 'flex', flexDirection: 'column', padding: '20px', overflowY: 'hidden', scrollbarWidth: 'none', msOverflowStyle: 'none' }}>
           <style>{`::-webkit-scrollbar { display: none !important; }`}</style>
