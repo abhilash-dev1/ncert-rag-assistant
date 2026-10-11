@@ -11,13 +11,15 @@ load_dotenv(dotenv_path=env_path, override=True)
 
 from fastapi import FastAPI, Depends, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import Response
+from fastapi.responses import Response, HTMLResponse
 from pydantic import BaseModel
 from typing import Optional
 from sqlalchemy.orm import Session
 from rag_search import build_index, search_similar, get_qdrant_client
 from database import get_db, init_db, User, ChatSession, ChatMessage, Note, BookAccess
 from google import genai
+import sqlite3
+import html as html_escape
 
 app = FastAPI(title="NCERT RAG (Gemini Tutor)")
 
@@ -86,12 +88,11 @@ def is_reversed(text):
     return rev_count >= 2 and rev_count > norm_count
 
 def fix_reversed_chunks(chunks):
-    """Fix any chunks that came back reversed from Qdrant"""
     fixed = []
     for c in chunks:
         if is_reversed(c):
             fixed.append(c[::-1])
-            print(f"🔄 Reversed a chunk: {c[:40]}... → {c[::-1][:40]}...")
+            print(f"🔄 Reversed a chunk: {c[:40]}...")
         else:
             fixed.append(c)
     return fixed
@@ -139,7 +140,6 @@ async def get_chapters(folder_name: str):
         print(f"⚠️ Error fetching chapters: {e}")
         return {"chapters": []}
 
-# ✅ PDF Proxy
 @app.get("/api/pdf/{folder_name}/{chapter_name}")
 async def serve_pdf(folder_name: str, chapter_name: str):
     pdf_url = f"{HF_BASE_URL}/{folder_name}/{chapter_name}"
@@ -253,7 +253,6 @@ async def chat(request: SearchRequest, db: Session = Depends(get_db)):
         print(f"⚠️ Search Error: {e}")
         chunks, metadata, scores = [], [], []
 
-    # ✅ Fix reversed chunks (from mirrored PDF pages)
     if chunks:
         chunks = fix_reversed_chunks(chunks)
 
@@ -406,3 +405,68 @@ Answer:"""
 @app.get("/")
 async def root():
     return {"status": "running", "message": "NCERT RAG Gemini Tutor is online!"}
+
+# --- ADMIN DB VIEWER ---
+@app.get("/admin/db", response_class=HTMLResponse)
+async def admin_db_view():
+    db_path = "/tmp/ncert_rag.db"
+    if not os.path.exists(db_path):
+        return HTMLResponse("""<body style='font-family:sans-serif;padding:40px;background:#0f172a;color:#e2e8f0'>
+        <h1>⚠️ No database yet</h1>
+        <p>Sign in to your app first, then refresh this page.</p>
+        <p style='color:#64748b;font-size:14px'>Looking for: /tmp/ncert_rag.db</p>
+        </body>""")
+
+    tables = ["users", "chat_sessions", "chat_messages", "notes", "book_access"]
+    html_parts = ["""<!DOCTYPE html>
+    <html><head><title>NCERT RAG DB Viewer</title>
+    <style>
+        body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; background: #0f172a; color: #e2e8f0; padding: 24px; margin: 0; }
+        h1 { color: #f87171; margin-bottom: 8px; }
+        .subtitle { color: #94a3b8; font-size: 14px; margin-bottom: 24px; }
+        h2 { color: #60a5fa; margin-top: 32px; border-bottom: 2px solid #334155; padding-bottom: 8px; font-size: 18px; }
+        table { border-collapse: collapse; width: 100%; margin-top: 12px; background: #1e293b; font-size: 13px; }
+        th, td { border: 1px solid #334155; padding: 8px 12px; text-align: left; vertical-align: top; max-width: 400px; overflow-wrap: break-word; }
+        th { background: #1e40af; color: white; font-weight: 600; position: sticky; top: 0; }
+        tr:nth-child(even) { background: #0f172a; }
+        tr:hover { background: #1e40af22; }
+        .empty { color: #64748b; font-style: italic; padding: 12px; background: #1e293b; border-radius: 6px; }
+        .count { color: #94a3b8; font-size: 13px; font-weight: normal; }
+        .refresh { display: inline-block; background: #3b82f6; color: white; padding: 8px 16px; text-decoration: none; border-radius: 6px; margin-top: 12px; font-size: 14px; }
+        .refresh:hover { background: #2563eb; }
+    </style></head><body>
+    <h1>📊 NCERT RAG Database Viewer</h1>
+    <p class="subtitle">Live view of <code>/tmp/ncert_rag.db</code> on Railway · <a href="/admin/db" class="refresh">🔄 Refresh</a></p>
+    """]
+
+    try:
+        conn = sqlite3.connect(db_path)
+        conn.row_factory = sqlite3.Row
+        cursor = conn.cursor()
+
+        for table in tables:
+            try:
+                rows = cursor.execute(f"SELECT * FROM {table}").fetchall()
+                html_parts.append(f"<h2>{table} <span class='count'>({len(rows)} rows)</span></h2>")
+                if not rows:
+                    html_parts.append("<p class='empty'>No rows yet.</p>")
+                    continue
+                html_parts.append("<table><thead><tr>")
+                for col in rows[0].keys():
+                    html_parts.append(f"<th>{html_escape.escape(str(col))}</th>")
+                html_parts.append("</tr></thead><tbody>")
+                for row in rows:
+                    html_parts.append("<tr>")
+                    for val in row:
+                        cell = html_escape.escape(str(val)) if val is not None else "<i style='color:#64748b'>NULL</i>"
+                        html_parts.append(f"<td>{cell}</td>")
+                    html_parts.append("</tr>")
+                html_parts.append("</tbody></table>")
+            except Exception as e:
+                html_parts.append(f"<p class='empty'>Error reading {table}: {e}</p>")
+
+        conn.close()
+        html_parts.append("</body></html>")
+        return HTMLResponse("".join(html_parts))
+    except Exception as e:
+        return HTMLResponse(f"<h1>Error: {e}</h1>")
