@@ -1,16 +1,22 @@
 import os
 from sqlalchemy import create_engine, Column, Integer, String, Text, DateTime, ForeignKey
-from sqlalchemy.ext.declarative import declarative_base
-from sqlalchemy.orm import sessionmaker, relationship
+from sqlalchemy.orm import declarative_base, sessionmaker, relationship
 from datetime import datetime
 
-# --- DATABASE ---
-DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:///./ncert_rag.db")
+# --- DATABASE URL SETUP ---
+# Retrieve the URL from Railway environment variables
+DATABASE_URL = os.getenv("DATABASE_URL", "sqlite:////tmp/ncert_rag.db")
 
-# ✅ Apply SQLite-specific options ONLY for SQLite (not for Postgres)
+# SQLAlchemy requires 'postgresql://', but Railway provides 'postgres://'
+if DATABASE_URL.startswith("postgres://"):
+    DATABASE_URL = DATABASE_URL.replace("postgres://", "postgresql://", 1)
+
+# Configure the engine based on the database type
 if DATABASE_URL.startswith("sqlite"):
+    # SQLite configuration (for local development)
     engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
 else:
+    # PostgreSQL configuration (for Railway production)
     engine = create_engine(DATABASE_URL, pool_pre_ping=True, pool_recycle=300)
 
 SessionLocal = sessionmaker(autocommit=False, autoflush=False, bind=engine)
@@ -63,15 +69,6 @@ class Note(Base):
     content = Column(Text)
     created_at = Column(DateTime, default=datetime.utcnow)
     user = relationship("User", back_populates="notes")
-
-
-class BookAccess(Base):
-    __tablename__ = "book_access"
-    id = Column(Integer, primary_key=True, index=True)
-    user_id = Column(Integer, index=True)
-    book_id = Column(String)
-    last_page = Column(Integer, default=1)
-    last_opened = Column(DateTime, default=datetime.utcnow)
 
 
 def init_db():
